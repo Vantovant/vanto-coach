@@ -145,7 +145,7 @@ export function ScriptureTab() {
   };
 
   const router = React.useMemo(() => {
-    // eslint-disable-next-line react-hooks/rules-of-hooks
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
     return typeof window !== 'undefined' ? require('next/navigation').useRouter() : null;
   }, []);
 

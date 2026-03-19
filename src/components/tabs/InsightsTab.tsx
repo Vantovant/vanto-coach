@@ -40,15 +40,88 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import { mockInsights } from '@/data/mock-data';
 import type { CoachInsight, GrowthArea, LifeBalanceScore } from '@/types/coach';
 import { cn } from '@/lib/utils';
+import { getSessions } from '@/lib/supabase/db';
+import { useAuth } from '@/context/AuthContext';
 
 export function InsightsTab() {
+  const { user } = useAuth();
   const [period, setPeriod] = React.useState<'week' | 'month' | 'quarter'>('week');
   const [activeTab, setActiveTab] = React.useState<'overview' | 'growth' | 'recommendations'>('overview');
+  const [insight, setInsight] = React.useState<CoachInsight | null>(null);
+  const [loading, setLoading] = React.useState(false);
 
-  const insight = mockInsights[0];
+  React.useEffect(() => {
+    if (!user) return;
+    setLoading(true);
+    getSessions().then(sessions => {
+      if (!sessions.length) { setLoading(false); return; }
+
+      const today = new Date();
+      const periodDays = period === 'week' ? 7 : period === 'month' ? 30 : 90;
+      const cutoff = new Date(today.getTime() - periodDays * 86400000);
+      const periodSessions = sessions.filter(s => new Date(s.session_date) >= cutoff);
+
+      // Derive mood trend
+      const moodCounts: Record<string, number> = {};
+      let positiveDays = 0;
+      for (const s of periodSessions) {
+        if (s.mood) moodCounts[s.mood] = (moodCounts[s.mood] ?? 0) + 1;
+        if (['grateful', 'hopeful', 'peaceful', 'joyful'].includes(s.mood ?? '')) positiveDays++;
+      }
+      const dominantMood = Object.entries(moodCounts).sort((a, b) => b[1] - a[1])[0]?.[0] ?? 'reflective';
+
+      // Derive life area frequency
+      const areaCounts: Record<string, number> = {};
+      for (const s of periodSessions) {
+        for (const a of (s.life_areas ?? [])) areaCounts[a] = (areaCounts[a] ?? 0) + 1;
+      }
+
+      const derived: CoachInsight = {
+        id: `derived-${period}`,
+        user_id: user.id,
+        insight_type: (period === 'week' ? 'weekly_review' : 'monthly_review') as CoachInsight['insight_type'],
+        period_start: cutoff.toISOString().slice(0, 10),
+        period_end: today.toISOString().slice(0, 10),
+        title: `${period === 'week' ? 'Weekly' : period === 'month' ? 'Monthly' : 'Quarterly'} Review`,
+        summary: periodSessions.length
+          ? `${periodSessions.length} session${periodSessions.length > 1 ? 's' : ''} recorded this ${period}. Dominant mood: ${dominantMood}.`
+          : `No sessions recorded this ${period} yet.`,
+        key_observations: periodSessions.slice(0, 4).map(s => s.summary ?? s.title).filter(Boolean),
+        growth_areas: Object.entries(areaCounts).slice(0, 4).map(([area, count]) => ({
+          area: area as GrowthArea['area'],
+          score: Math.min(100, count * 20),
+          trend: 'stable' as const,
+          insight: `Mentioned in ${count} session${count > 1 ? 's' : ''}`,
+        })),
+        challenges: periodSessions.flatMap(s => s.structured_entry?.struggles ?? []).slice(0, 3),
+        recommendations: ['Keep journaling consistently', 'Review and act on extracted action items', 'Pray over recurring struggles'],
+        scripture_focus: [],
+        next_steps: periodSessions.flatMap(s => s.structured_entry?.followups ?? []).slice(0, 3),
+        mood_trend: {
+          dominant_mood: dominantMood as CoachInsight['mood_trend']['dominant_mood'],
+          variance: 0.5,
+          positive_days: positiveDays,
+          challenging_days: periodSessions.length - positiveDays,
+        },
+        life_balance: {
+          faith: (areaCounts['faith'] ?? 0) * 15 || 50,
+          family: (areaCounts['family'] ?? 0) * 15 || 50,
+          health: (areaCounts['health'] ?? 0) * 15 || 50,
+          finances: (areaCounts['finances'] ?? 0) * 15 || 50,
+          business: (areaCounts['business'] ?? 0) * 15 || 50,
+          relationships: (areaCounts['relationships'] ?? 0) * 15 || 50,
+          rest: (areaCounts['rest'] ?? 0) * 15 || 50,
+          growth: (areaCounts['personal_growth'] ?? 0) * 15 || 50,
+        },
+        created_at: new Date().toISOString(),
+      };
+      setInsight(derived);
+      setLoading(false);
+    });
+  }, [user, period]);
+
   const today = new Date();
   const weekStart = startOfWeek(today, { weekStartsOn: 1 });
   const weekEnd = endOfWeek(today, { weekStartsOn: 1 });
@@ -103,6 +176,15 @@ export function InsightsTab() {
         </div>
 
         {/* Weekly Summary Card */}
+        {loading && (
+          <Card className="card-elevated">
+            <CardContent className="py-10 text-center">
+              <Sparkles className="h-8 w-8 mx-auto text-muted-foreground/30 mb-3 animate-pulse" />
+              <p className="text-sm text-muted-foreground">Building insights from your sessions…</p>
+            </CardContent>
+          </Card>
+        )}
+        {!loading && insight && (
         <Card className="card-elevated bg-gradient-to-br from-primary/5 via-background to-accent/5">
           <CardHeader className="pb-3">
             <div className="flex items-center justify-between">
@@ -121,9 +203,18 @@ export function InsightsTab() {
             </p>
           </CardContent>
         </Card>
+        )}
+        {!loading && !insight && (
+          <Card className="card-elevated">
+            <CardContent className="py-10 text-center">
+              <Sparkles className="h-8 w-8 mx-auto text-muted-foreground/30 mb-3" />
+              <p className="text-sm text-muted-foreground">No sessions yet. Start recording to build insights.</p>
+            </CardContent>
+          </Card>
+        )}
 
-        {/* Tabs */}
-        <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as typeof activeTab)}>
+        {/* Tabs — only shown when insight data exists */}
+        {!loading && insight && <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as typeof activeTab)}>
           <TabsList className="grid w-full grid-cols-3">
             <TabsTrigger value="overview">Overview</TabsTrigger>
             <TabsTrigger value="growth">Growth Areas</TabsTrigger>
@@ -339,7 +430,7 @@ export function InsightsTab() {
               </CardContent>
             </Card>
           </TabsContent>
-        </Tabs>
+        </Tabs>}
       </div>
     </div>
   );

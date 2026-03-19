@@ -18,11 +18,14 @@ import {
   ChevronRight,
   Mic,
   Command,
+  LogOut,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Sheet, SheetContent, SheetTrigger } from '@/components/ui/sheet';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import type { CoachTab } from '@/types/coach';
+import { signOut } from '@/lib/supabase/auth';
+import { useAuth } from '@/context/AuthContext';
 
 interface CoachLayoutProps {
   children: React.ReactNode;
@@ -77,6 +80,11 @@ export function CoachLayout({ children }: CoachLayoutProps) {
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const [isMobileNavOpen, setIsMobileNavOpen] = React.useState(false);
+  const { user } = useAuth();
+
+  const handleSignOut = async () => {
+    await signOut();
+  };
 
   const currentTab = (searchParams.get('tab') as CoachTab) || 'today';
 
@@ -150,6 +158,17 @@ export function CoachLayout({ children }: CoachLayoutProps) {
                 <Settings className="h-5 w-5" />
               </Button>
             </Link>
+            {user && (
+              <Button
+                variant="ghost"
+                size="icon"
+                className="text-muted-foreground hidden md:flex"
+                onClick={handleSignOut}
+                title={`Sign out (${user.email})`}
+              >
+                <LogOut className="h-5 w-5" />
+              </Button>
+            )}
           </div>
         </div>
       </header>

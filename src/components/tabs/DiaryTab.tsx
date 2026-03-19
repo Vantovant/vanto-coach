@@ -52,8 +52,10 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
-import { mockSessions } from '@/data/mock-data';
 import type { CoachSession, SessionMood, LifeArea } from '@/types/coach';
+import { useSessions } from '@/hooks/useSessions';
+import { createSession } from '@/lib/supabase/db';
+import { uploadAudio } from '@/lib/supabase/storage';
 import { cn } from '@/lib/utils';
 import { VoiceRecorder, type ExtendedRecordingResult } from '@/components/diary/VoiceRecorder';
 import { SessionDetail } from '@/components/diary/SessionDetail';
@@ -63,20 +65,26 @@ export function DiaryTab() {
   const [searchQuery, setSearchQuery] = React.useState('');
   const [filterMood, setFilterMood] = React.useState<SessionMood | 'all'>('all');
   const [showRecorder, setShowRecorder] = React.useState(false);
-  const [localSessions, setLocalSessions] = React.useState<CoachSession[]>([]);
 
-  // Combine mock sessions with locally recorded sessions
-  const allSessions = React.useMemo(() => {
-    return [...localSessions, ...mockSessions];
-  }, [localSessions]);
+  const { sessions, loading: sessionsLoading, error: sessionsError, prependSession } = useSessions();
 
-  const handleRecordingComplete = React.useCallback((result: ExtendedRecordingResult | null) => {
+  const allSessions = sessions;
+
+  const handleRecordingComplete = React.useCallback(async (result: ExtendedRecordingResult | null) => {
     if (result) {
-      // Create a new session from the recording with AI-processed data
       const hasTranscript = result.transcript && result.transcript.trim().length > 0;
-      const hasProcessedData = result.summary && result.summary.length > 0;
+      const hasProcessedData = !!(result.summary && result.summary.length > 0);
 
-      // Map key topics to life areas
+      // 1. Upload audio to Supabase Storage
+      let storedAudioUrl: string | null = result.audioUrl;
+      if (result.audioBlob) {
+        const storagePath = await uploadAudio(result.audioBlob, result.mimeType || 'audio/webm');
+        if (storagePath) {
+          storedAudioUrl = storagePath; // store the path; signed URL is generated at play time
+        }
+      }
+
+      // 2. Map key topics → life areas
       const lifeAreas: LifeArea[] = (result.keyTopics || [])
         .map(topic => topic.toLowerCase() as LifeArea)
         .filter(area => [
@@ -86,7 +94,7 @@ export function DiaryTab() {
         ].includes(area))
         .slice(0, 5);
 
-      // Create structured entry from extracted data
+      // 3. Build structured entry
       const structuredEntry = (result.actionItems?.length || result.prayerPoints?.length) ? {
         wins: [],
         struggles: [],
@@ -106,16 +114,45 @@ export function DiaryTab() {
         leadership: [],
       } : null;
 
-      const newSession: CoachSession = {
-        id: `session-local-${Date.now()}`,
-        user_id: 'user-1',
+      // 4. Persist to Supabase
+      const saved = await createSession({
         title: `Voice Entry - ${format(new Date(), 'MMMM d, h:mm a')}`,
         session_date: format(new Date(), 'yyyy-MM-dd'),
-        audio_url: result.audioUrl,
+        audio_url: storedAudioUrl,
         audio_duration_seconds: result.duration,
         raw_transcript: hasTranscript ? result.transcript : null,
         cleaned_transcript: result.cleanedTranscript || (hasTranscript ? result.transcript : null),
         summary: result.summary || (hasTranscript ? result.transcript.slice(0, 150) + (result.transcript.length > 150 ? '...' : '') : 'New recording - processing...'),
+        mood: result.mood || null,
+        sentiment_score: result.mood ? getMoodSentiment(result.mood) : null,
+        life_areas: lifeAreas,
+        spiritual_topics: result.prayerPoints?.length ? ['prayer'] : [],
+        coach_response: hasProcessedData ? 'AI analysis complete. Review your insights below.' : null,
+        action_status: result.actionItems?.length ? 'extracted' : (hasTranscript ? 'pending' : 'none'),
+        structured_entry: structuredEntry,
+        action_items: result.actionItems?.map(title => ({
+          title,
+          action_type: 'task',
+          priority: 'medium',
+          category: null,
+        })),
+        prayer_points: result.prayerPoints?.map(content => ({
+          content,
+          category: null,
+        })),
+      });
+
+      // 5. Optimistic local update (use saved row or build a local placeholder)
+      const sessionToShow: CoachSession = saved ?? {
+        id: `session-local-${Date.now()}`,
+        user_id: '',
+        title: `Voice Entry - ${format(new Date(), 'MMMM d, h:mm a')}`,
+        session_date: format(new Date(), 'yyyy-MM-dd'),
+        audio_url: storedAudioUrl,
+        audio_duration_seconds: result.duration,
+        raw_transcript: hasTranscript ? result.transcript : null,
+        cleaned_transcript: result.cleanedTranscript || (hasTranscript ? result.transcript : null),
+        summary: result.summary || 'New recording - processing...',
         mood: (result.mood as SessionMood) || null,
         sentiment_score: result.mood ? getMoodSentiment(result.mood) : null,
         life_areas: lifeAreas,
@@ -129,11 +166,11 @@ export function DiaryTab() {
         deleted_at: null,
       };
 
-      setLocalSessions(prev => [newSession, ...prev]);
-      setSelectedSession(newSession);
+      prependSession(sessionToShow);
+      setSelectedSession(sessionToShow);
     }
     setShowRecorder(false);
-  }, []);
+  }, [prependSession]);
 
   const filteredSessions = React.useMemo(() => {
     return allSessions.filter(session => {
@@ -143,7 +180,7 @@ export function DiaryTab() {
       const matchesMood = filterMood === 'all' || session.mood === filterMood;
       return matchesSearch && matchesMood;
     });
-  }, [searchQuery, filterMood]);
+  }, [searchQuery, filterMood, allSessions]);
 
   const groupedSessions = React.useMemo(() => {
     const groups: { [key: string]: CoachSession[] } = {};
@@ -228,6 +265,20 @@ export function DiaryTab() {
             {/* Sessions List */}
             <ScrollArea className="h-[calc(100vh-300px)]">
               <div className="space-y-6 pr-4">
+                {/* Loading state */}
+                {sessionsLoading && (
+                  <div className="flex items-center justify-center py-12 gap-3 text-muted-foreground">
+                    <Loader2 className="h-5 w-5 animate-spin" />
+                    <span className="text-sm">Loading entries…</span>
+                  </div>
+                )}
+                {/* Error state */}
+                {sessionsError && !sessionsLoading && (
+                  <div className="flex items-start gap-3 p-4 rounded-xl bg-destructive/10 border border-destructive/20">
+                    <AlertCircle className="h-4 w-4 text-destructive shrink-0 mt-0.5" />
+                    <p className="text-sm text-destructive">{sessionsError}</p>
+                  </div>
+                )}
                 {Object.entries(groupedSessions).map(([date, sessions]) => (
                   <div key={date}>
                     <h3 className="text-sm font-medium text-muted-foreground mb-3">{date}</h3>

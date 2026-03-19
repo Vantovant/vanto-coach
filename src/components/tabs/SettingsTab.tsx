@@ -46,14 +46,42 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from '@/components/ui/alert-dialog';
-import { mockSettings } from '@/data/mock-data';
 import type { CoachSettings, CoachingTone, BibleTranslation } from '@/types/coach';
+import { getSettings, upsertSettings } from '@/lib/supabase/db';
+import { useAuth } from '@/context/AuthContext';
+
+const DEFAULT_SETTINGS: CoachSettings = {
+  user_id: '',
+  coaching_tone: 'balanced',
+  scripture_translation: 'KJV',
+  memory_retention_days: 365,
+  auto_extract_actions: true,
+  pastoral_mode: true,
+  pentecostal_guidance: true,
+  transcription_language: 'en-US',
+  daily_briefing_time: '06:00',
+  prayer_reminder_enabled: true,
+  updated_at: new Date().toISOString(),
+};
 
 export function SettingsTab() {
-  const [settings, setSettings] = React.useState<CoachSettings>(mockSettings);
+  const { user } = useAuth();
+  const [settings, setSettings] = React.useState<CoachSettings>(DEFAULT_SETTINGS);
+  const [saving, setSaving] = React.useState(false);
+
+  React.useEffect(() => {
+    if (!user) return;
+    getSettings().then(data => {
+      if (data) setSettings({ ...DEFAULT_SETTINGS, ...data, user_id: user.id });
+      else setSettings({ ...DEFAULT_SETTINGS, user_id: user.id });
+    });
+  }, [user]);
 
   const updateSetting = <K extends keyof CoachSettings>(key: K, value: CoachSettings[K]) => {
-    setSettings(prev => ({ ...prev, [key]: value }));
+    const updated = { ...settings, [key]: value };
+    setSettings(updated);
+    setSaving(true);
+    upsertSettings(updated).finally(() => setSaving(false));
   };
 
   return (
@@ -61,10 +89,15 @@ export function SettingsTab() {
       {/* Header */}
       <div className="bg-card border-b">
         <div className="container max-w-4xl mx-auto px-4 py-6">
-          <h1 className="text-2xl font-semibold tracking-tight flex items-center gap-2">
-            <Settings className="h-6 w-6 text-primary" />
-            Settings
-          </h1>
+          <div className="flex items-center justify-between gap-4">
+            <h1 className="text-2xl font-semibold tracking-tight flex items-center gap-2">
+              <Settings className="h-6 w-6 text-primary" />
+              Settings
+            </h1>
+            {saving && (
+              <span className="text-xs text-muted-foreground animate-pulse">Saving…</span>
+            )}
+          </div>
           <p className="text-muted-foreground mt-1">
             Customize your coaching experience and manage your data.
           </p>

@@ -12,6 +12,7 @@ import { InsightsTab } from '@/components/tabs/InsightsTab';
 import { SettingsTab } from '@/components/tabs/SettingsTab';
 import type { CoachTab } from '@/types/coach';
 import { Skeleton } from '@/components/ui/skeleton';
+import { AuthGate } from '@/components/auth/AuthGate';
 
 function CoachContent() {
   const searchParams = useSearchParams();
@@ -46,10 +47,12 @@ function LoadingFallback() {
 
 export default function CoachPage() {
   return (
-    <CoachLayout>
-      <Suspense fallback={<LoadingFallback />}>
-        <CoachContent />
-      </Suspense>
-    </CoachLayout>
+    <AuthGate>
+      <CoachLayout>
+        <Suspense fallback={<LoadingFallback />}>
+          <CoachContent />
+        </Suspense>
+      </CoachLayout>
+    </AuthGate>
   );
 }

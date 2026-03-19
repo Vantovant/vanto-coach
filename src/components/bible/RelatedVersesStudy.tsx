@@ -307,6 +307,7 @@ interface GroupedViewProps {
     thematic: CrossReference[];
     complementary: CrossReference[];
   };
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   relatedPassages: Map<string, any>;
   loadingRelated: boolean;
   copiedVerse: string | null;
@@ -388,6 +389,7 @@ interface RelevanceGroupProps {
   description: string;
   color: 'accent' | 'primary' | 'muted';
   verses: CrossReference[];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   relatedPassages: Map<string, any>;
   loadingRelated: boolean;
   copiedVerse: string | null;
@@ -456,6 +458,7 @@ function RelevanceGroup({
 // List View Component
 interface ListViewProps {
   verses: CrossReference[];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   relatedPassages: Map<string, any>;
   loadingRelated: boolean;
   copiedVerse: string | null;
@@ -498,6 +501,7 @@ function ListView({
 // Related Verse Card Component
 interface RelatedVerseCardProps {
   crossRef: CrossReference;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   passage: any;
   isLoading: boolean;
   isCopied: boolean;

@@ -46,40 +46,48 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
-import { mockActionItems, mockSessions } from '@/data/mock-data';
 import type { CoachActionItem, ActionType, Priority, LifeArea } from '@/types/coach';
 import { cn } from '@/lib/utils';
+import { getActionItems, updateActionItemStatus } from '@/lib/supabase/db';
+import { useAuth } from '@/context/AuthContext';
 
 export function ActionPlansTab() {
+  const { user } = useAuth();
   const [activeTab, setActiveTab] = React.useState<'pending' | 'approved' | 'synced' | 'all'>('pending');
   const [selectedItems, setSelectedItems] = React.useState<Set<string>>(new Set());
   const [showSyncDialog, setShowSyncDialog] = React.useState(false);
   const [searchQuery, setSearchQuery] = React.useState('');
+  const [actionItems, setActionItems] = React.useState<CoachActionItem[]>([]);
+  const [loading, setLoading] = React.useState(false);
+
+  React.useEffect(() => {
+    if (!user) return;
+    setLoading(true);
+    getActionItems().then(data => { setActionItems(data); setLoading(false); });
+  }, [user]);
 
   const filteredItems = React.useMemo(() => {
-    return mockActionItems.filter(item => {
+    return actionItems.filter(item => {
       const matchesSearch = searchQuery === '' ||
         item.title.toLowerCase().includes(searchQuery.toLowerCase());
       const matchesTab = activeTab === 'all' || item.status === activeTab;
       return matchesSearch && matchesTab;
     });
-  }, [searchQuery, activeTab]);
+  }, [searchQuery, activeTab, actionItems]);
 
   const groupedBySession = React.useMemo(() => {
-    const groups: { [sessionId: string]: { session: typeof mockSessions[0] | null; items: CoachActionItem[] } } = {};
+    const groups: { [key: string]: { sessionId: string; items: CoachActionItem[] } } = {};
     filteredItems.forEach(item => {
-      if (!groups[item.session_id]) {
-        const session = mockSessions.find(s => s.id === item.session_id) || null;
-        groups[item.session_id] = { session, items: [] };
-      }
-      groups[item.session_id].items.push(item);
+      const key = item.session_id ?? 'no-session';
+      if (!groups[key]) groups[key] = { sessionId: key, items: [] };
+      groups[key].items.push(item);
     });
     return groups;
   }, [filteredItems]);
 
-  const pendingCount = mockActionItems.filter(i => i.status === 'pending').length;
-  const approvedCount = mockActionItems.filter(i => i.status === 'approved').length;
-  const syncedCount = mockActionItems.filter(i => i.status === 'synced').length;
+  const pendingCount = actionItems.filter(i => i.status === 'pending').length;
+  const approvedCount = actionItems.filter(i => i.status === 'approved').length;
+  const syncedCount = actionItems.filter(i => i.status === 'synced').length;
 
   const toggleSelect = (id: string) => {
     const newSelected = new Set(selectedItems);
@@ -96,9 +104,12 @@ export function ActionPlansTab() {
     setSelectedItems(new Set(pendingIds));
   };
 
-  const handleApproveSelected = () => {
-    // In real app, this would call the API
-    console.log('Approving items:', Array.from(selectedItems));
+  const handleApproveSelected = async () => {
+    const ids = Array.from(selectedItems);
+    await Promise.all(ids.map(id => updateActionItemStatus(id, 'approved')));
+    setActionItems(prev => prev.map(item =>
+      ids.includes(item.id) ? { ...item, status: 'approved' as const } : item
+    ));
     setSelectedItems(new Set());
   };
 
@@ -200,7 +211,7 @@ export function ActionPlansTab() {
               <div className="flex items-center justify-between">
                 <div>
                   <p className="text-sm text-muted-foreground">Total Extracted</p>
-                  <p className="text-2xl font-semibold">{mockActionItems.length}</p>
+                  <p className="text-2xl font-semibold">{actionItems.length}</p>
                 </div>
                 <div className="h-10 w-10 rounded-full bg-[hsl(var(--spiritual))]/20 flex items-center justify-center">
                   <Sparkles className="h-5 w-5 text-[hsl(var(--spiritual))]" />
@@ -267,7 +278,7 @@ export function ActionPlansTab() {
 
         {/* Action Items by Session */}
         <div className="space-y-6">
-          {Object.entries(groupedBySession).map(([sessionId, { session, items }]) => (
+          {Object.entries(groupedBySession).map(([sessionId, { items }]) => (
             <Card key={sessionId} className="card-premium">
               <CardHeader className="pb-3">
                 <div className="flex items-center justify-between">
@@ -277,10 +288,10 @@ export function ActionPlansTab() {
                     </div>
                     <div>
                       <CardTitle className="text-base">
-                        {session?.title || 'Session'}
+                        Session
                       </CardTitle>
                       <CardDescription className="text-xs">
-                        {session ? format(parseISO(session.session_date), 'MMMM d, yyyy') : 'Unknown date'}
+                        {items[0]?.created_at ? format(parseISO(items[0].created_at), 'MMMM d, yyyy') : 'Unknown date'}
                         {' • '}{items.length} actions extracted
                       </CardDescription>
                     </div>
@@ -341,7 +352,7 @@ export function ActionPlansTab() {
           </DialogHeader>
           <div className="py-4">
             <div className="space-y-3">
-              {mockActionItems.filter(i => i.status === 'approved').map(item => (
+              {actionItems.filter(i => i.status === 'approved').map(item => (
                 <div key={item.id} className="flex items-center gap-3 p-3 rounded-lg bg-muted/50">
                   <CheckCircle2 className="h-4 w-4 text-success shrink-0" />
                   <div className="flex-1 min-w-0">

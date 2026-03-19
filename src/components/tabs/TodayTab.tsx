@@ -29,23 +29,35 @@ import { Badge } from '@/components/ui/badge';
 import { ScrollArea, ScrollBar } from '@/components/ui/scroll-area';
 import { Separator } from '@/components/ui/separator';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
-import { mockDailyBriefing, mockPrayerRequests, mockActionItems } from '@/data/mock-data';
+import { mockDailyBriefing } from '@/data/mock-data';
 import { useCrossReferences } from '@/hooks/useCrossReferences';
 import { useBibleVerse } from '@/hooks/useBibleVerse';
 import { buildScriptureUrlFromReference, buildStudyUrl } from '@/lib/bible/navigation';
 import { cn } from '@/lib/utils';
 import { useRouter } from 'next/navigation';
+import { getActionItems, getPrayerPoints, type PrayerPointRow } from '@/lib/supabase/db';
+import type { CoachActionItem } from '@/types/coach';
+import { useAuth } from '@/context/AuthContext';
 
 export function TodayTab() {
+  const { user } = useAuth();
   const briefing = mockDailyBriefing;
   const [formattedDate, setFormattedDate] = React.useState('');
   const [greeting, setGreeting] = React.useState('');
+  const [actionItems, setActionItems] = React.useState<CoachActionItem[]>([]);
+  const [prayerPoints, setPrayerPoints] = React.useState<PrayerPointRow[]>([]);
 
   React.useEffect(() => {
     const today = new Date();
     setFormattedDate(format(today, 'EEEE, MMMM d, yyyy'));
     setGreeting(getGreeting());
   }, []);
+
+  React.useEffect(() => {
+    if (!user) return;
+    getActionItems().then(setActionItems);
+    getPrayerPoints('active').then(setPrayerPoints);
+  }, [user]);
 
   // Get the scripture reference string for cross-references
   const scriptureRef = `${briefing.scripture_for_today.book} ${briefing.scripture_for_today.chapter}:${briefing.scripture_for_today.verse_start}`;
@@ -344,23 +356,25 @@ export function TodayTab() {
                 <CardTitle className="text-base font-semibold">Active Prayer Requests</CardTitle>
               </div>
               <Badge variant="secondary" className="text-xs">
-                {mockPrayerRequests.filter(p => p.status === 'active').length} active
+                {prayerPoints.length} active
               </Badge>
             </div>
           </CardHeader>
           <CardContent>
             <div className="space-y-2.5">
-              {mockPrayerRequests.filter(p => p.status === 'active').slice(0, 3).map((prayer) => (
+              {prayerPoints.slice(0, 3).map((prayer) => (
                 <div key={prayer.id} className="flex items-start gap-3 p-3 rounded-lg bg-muted/40 hover:bg-muted/60 transition-colors cursor-pointer">
                   <Heart className="h-4 w-4 text-[hsl(var(--spiritual))] mt-0.5 shrink-0" />
                   <div className="flex-1 min-w-0">
-                    <p className="font-medium text-sm">{prayer.title}</p>
+                    <p className="font-medium text-sm">{prayer.content}</p>
                     <div className="flex items-center gap-2 mt-1.5">
-                      <Badge variant="outline" className="text-[10px] capitalize font-normal">
-                        {prayer.category}
-                      </Badge>
+                      {prayer.category && (
+                        <Badge variant="outline" className="text-[10px] capitalize font-normal">
+                          {prayer.category}
+                        </Badge>
+                      )}
                       <span className="text-xs text-muted-foreground">
-                        Since {format(new Date(prayer.first_prayed_at), 'MMM d')}
+                        Since {format(new Date(prayer.created_at), 'MMM d')}
                       </span>
                     </div>
                   </div>

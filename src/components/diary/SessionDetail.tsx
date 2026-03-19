@@ -43,6 +43,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import type { CoachSession, LifeArea } from '@/types/coach';
 import { cn } from '@/lib/utils';
+import { getSignedAudioUrl } from '@/lib/supabase/storage';
 import { ScriptureList } from '@/components/bible/ScriptureCard';
 import { useCrossReferences } from '@/hooks/useCrossReferences';
 import { useBibleVerse } from '@/hooks/useBibleVerse';
@@ -61,6 +62,20 @@ export function SessionDetail({ session, onClose }: SessionDetailProps) {
   const [audioDuration, setAudioDuration] = React.useState(session.audio_duration_seconds || 0);
   const [activeTab, setActiveTab] = React.useState<'transcript' | 'coaching' | 'actions'>('transcript');
   const [showFullTranscript, setShowFullTranscript] = React.useState(false);
+  // Resolved playback URL (may need signed URL for Supabase Storage paths)
+  const [resolvedAudioUrl, setResolvedAudioUrl] = React.useState<string | null>(null);
+
+  React.useEffect(() => {
+    const raw = session.audio_url;
+    if (!raw) { setResolvedAudioUrl(null); return; }
+    // If it's already a full URL (blob:, http:, https:), use it directly
+    if (raw.startsWith('blob:') || raw.startsWith('http')) {
+      setResolvedAudioUrl(raw);
+    } else {
+      // It's a Supabase Storage path — get a signed URL
+      getSignedAudioUrl(raw).then(url => setResolvedAudioUrl(url));
+    }
+  }, [session.audio_url]);
 
   // Audio playback handling
   React.useEffect(() => {
@@ -100,7 +115,7 @@ export function SessionDetail({ session, onClose }: SessionDetailProps) {
       audio.removeEventListener('play', handlePlay);
       audio.removeEventListener('pause', handlePause);
     };
-  }, [session.audio_url]);
+  }, [resolvedAudioUrl]);
 
   const togglePlayback = () => {
     const audio = audioRef.current;
@@ -190,10 +205,10 @@ export function SessionDetail({ session, onClose }: SessionDetailProps) {
       {/* Audio Player */}
       {session.audio_url && (
         <div className="px-4 py-3 border-b bg-muted/30 shrink-0">
-          {/* Hidden audio element */}
+          {/* Hidden audio element — src resolves blob URLs or signed Supabase Storage URLs */}
           <audio
             ref={audioRef}
-            src={session.audio_url}
+            src={resolvedAudioUrl ?? undefined}
             preload="metadata"
           />
 

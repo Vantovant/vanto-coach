@@ -42,31 +42,40 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import { mockMemories, mockInsights } from '@/data/mock-data';
-import type { CoachMemory, MemoryType, GrowthIndicator } from '@/types/coach';
+import type { CoachMemory, CoachInsight, MemoryType, GrowthIndicator } from '@/types/coach';
 import { cn } from '@/lib/utils';
+import { getMemories } from '@/lib/supabase/db';
+import { useAuth } from '@/context/AuthContext';
 
 export function MemoryTab() {
+  const { user } = useAuth();
   const [selectedMemory, setSelectedMemory] = React.useState<CoachMemory | null>(null);
   const [filterType, setFilterType] = React.useState<MemoryType | 'all'>('all');
   const [searchQuery, setSearchQuery] = React.useState('');
   const [view, setView] = React.useState<'cards' | 'timeline'>('cards');
+  const [memories, setMemories] = React.useState<CoachMemory[]>([]);
+  const [loading, setLoading] = React.useState(false);
+
+  React.useEffect(() => {
+    if (!user) return;
+    setLoading(true);
+    getMemories().then(data => { setMemories(data); setLoading(false); });
+  }, [user]);
 
   const filteredMemories = React.useMemo(() => {
-    return mockMemories.filter(memory => {
+    return memories.filter(memory => {
       const matchesSearch = searchQuery === '' ||
         memory.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
         memory.summary.toLowerCase().includes(searchQuery.toLowerCase());
       const matchesType = filterType === 'all' || memory.memory_type === filterType;
       return matchesSearch && matchesType && !memory.is_archived;
     });
-  }, [searchQuery, filterType]);
+  }, [searchQuery, filterType, memories]);
 
   const pinnedMemories = filteredMemories.filter(m => m.is_pinned);
   const regularMemories = filteredMemories.filter(m => !m.is_pinned);
 
-  // Get the latest insight
-  const latestInsight = mockInsights[0];
+  const latestInsight: CoachInsight | null = null;
 
   return (
     <div className="pb-24 md:pb-8">
@@ -99,8 +108,10 @@ export function MemoryTab() {
       </div>
 
       <div className="container max-w-6xl mx-auto px-4 py-6 space-y-6">
-        {/* Life Balance Overview */}
-        {latestInsight && (
+        {/* Life Balance Overview — shown when an insight is available */}
+        {latestInsight != null && (() => {
+          const ins = latestInsight as CoachInsight;
+          return (
           <Card className="card-elevated">
             <CardHeader className="pb-3">
               <div className="flex items-center justify-between">
@@ -115,7 +126,7 @@ export function MemoryTab() {
             </CardHeader>
             <CardContent>
               <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                {Object.entries(latestInsight.life_balance).map(([area, score]) => (
+                {Object.entries(ins.life_balance as unknown as Record<string, number>).map(([area, score]) => (
                   <div key={area} className="space-y-2">
                     <div className="flex items-center justify-between">
                       <span className="text-sm capitalize">{area}</span>
@@ -135,35 +146,10 @@ export function MemoryTab() {
               </div>
             </CardContent>
           </Card>
-        )}
+          );
+        })()}
 
-        {/* Growth Indicators */}
-        <div className="grid gap-4 md:grid-cols-3">
-          {latestInsight?.growth_areas.slice(0, 3).map((area) => (
-            <Card key={area.area} className="card-premium">
-              <CardContent className="p-4">
-                <div className="flex items-center justify-between mb-3">
-                  <div className="flex items-center gap-2">
-                    {getAreaIcon(area.area)}
-                    <span className="font-medium capitalize">{area.area}</span>
-                  </div>
-                  <div className={cn(
-                    'flex items-center gap-1 text-sm font-medium',
-                    area.trend === 'up' && 'text-success',
-                    area.trend === 'down' && 'text-destructive',
-                    area.trend === 'stable' && 'text-muted-foreground'
-                  )}>
-                    {area.trend === 'up' && <TrendingUp className="h-4 w-4" />}
-                    {area.trend === 'down' && <TrendingDown className="h-4 w-4" />}
-                    {area.trend === 'stable' && <Minus className="h-4 w-4" />}
-                    {area.score}%
-                  </div>
-                </div>
-                <p className="text-sm text-muted-foreground">{area.insight}</p>
-              </CardContent>
-            </Card>
-          ))}
-        </div>
+        {/* Growth Indicators — populated once insight data is available */}
 
         {/* Search & Filter */}
         <div className="flex gap-2">
@@ -250,7 +236,15 @@ export function MemoryTab() {
             <MemoryTimeline memories={regularMemories} />
           )}
 
-          {filteredMemories.length === 0 && (
+          {loading && (
+            <Card className="card-premium">
+              <CardContent className="py-12 text-center">
+                <Sparkles className="h-12 w-12 mx-auto text-muted-foreground/30 mb-4 animate-pulse" />
+                <p className="text-muted-foreground">Loading patterns…</p>
+              </CardContent>
+            </Card>
+          )}
+          {!loading && filteredMemories.length === 0 && (
             <Card className="card-premium">
               <CardContent className="py-12 text-center">
                 <Brain className="h-12 w-12 mx-auto text-muted-foreground/30 mb-4" />

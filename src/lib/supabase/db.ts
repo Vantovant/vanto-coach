@@ -211,6 +211,36 @@ export async function softDeleteSession(id: string): Promise<boolean> {
 }
 
 // ─────────────────────────────────────────────
+// PRAYER POINTS
+// ─────────────────────────────────────────────
+
+export interface PrayerPointRow {
+  id: string;
+  session_id: string;
+  user_id: string;
+  content: string;
+  category: string | null;
+  status: 'active' | 'answered' | 'continuing';
+  answered_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export async function getPrayerPoints(status?: 'active' | 'answered' | 'continuing'): Promise<PrayerPointRow[]> {
+  const supabase = createClient();
+  let query = supabase
+    .from('coach_prayer_points')
+    .select('*')
+    .order('created_at', { ascending: false });
+
+  if (status) query = query.eq('status', status);
+
+  const { data, error } = await query;
+  if (error) { console.error('[db] getPrayerPoints error:', error.message); return []; }
+  return data ?? [];
+}
+
+// ─────────────────────────────────────────────
 // MEMORIES
 // ─────────────────────────────────────────────
 

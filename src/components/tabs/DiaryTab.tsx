@@ -408,8 +408,12 @@ export function DiaryTab() {
 
 /**
  * Derives and writes coach_memory rows from a just-saved diary session.
- * Each category is only written when the session has relevant content.
- * All calls are upserts so repeated saves on the same theme reinforce confidence.
+ *
+ * Quality rules:
+ * - Summaries are specific: what happened, who was involved, why it matters later.
+ * - No generic filler. Use the actual session content: cleanedTranscript > summary > fragments.
+ * - Titles are concise descriptors, not labels.
+ * - Suggested actions come from real action items when available.
  */
 async function writeMemoriesFromSession(
   sessionId: string,
@@ -417,78 +421,136 @@ async function writeMemoriesFromSession(
 ): Promise<void> {
   const today = new Date().toISOString().split('T')[0];
 
-  // Prayer burden — any prayer points become a living memory
+  // The best available text for memory content — prefer cleaned over raw summary
+  const bestText = result.cleanedTranscript?.trim() || result.summary?.trim() || '';
+  const shortText = bestText.slice(0, 200);
+
+  // ── Prayer burden ───────────────────────────────────────────────────────────
+  // Use actual prayer points as the substance, not just their existence.
   if (result.prayerPoints && result.prayerPoints.length > 0) {
+    const points = result.prayerPoints.slice(0, 3);
+    const pointList = points.map((p, i) => `${i + 1}. ${p}`).join(' ');
+    const contextNote = shortText
+      ? ` Context: ${shortText.slice(0, 100)}${shortText.length > 100 ? '...' : ''}`
+      : '';
     await upsertMemory({
       memory_type: 'prayer_burden',
-      title: 'Active prayer needs from diary',
-      summary: result.prayerPoints.slice(0, 3).join('; '),
-      confidence: 70,
+      title: points.length === 1
+        ? `Prayer need: ${points[0].slice(0, 50)}`
+        : `${points.length} active prayer needs`,
+      summary: `Active prayer items from this entry: ${pointList}.${contextNote}`,
+      confidence: 75,
       related_session_ids: [sessionId],
-      suggested_actions: ['Continue praying over these areas', 'Review prayer points weekly'],
+      suggested_actions: [
+        ...points.map(p => `Keep praying: ${p.slice(0, 60)}`),
+        'Review answered prayers weekly',
+      ].slice(0, 3),
       growth_indicators: [],
       scripture_refs: [],
     });
   }
 
-  // Recurring struggle — negative or anxious moods with action items signal a struggle pattern
-  const struggleMoods = ['anxious', 'stressed', 'overwhelmed', 'discouraged', 'frustrated', 'confused'];
-  if (result.mood && struggleMoods.includes(result.mood) && result.actionItems?.length) {
+  // ── Recurring struggle ─────────────────────────────────────────────────────
+  // Describe what the struggle actually is, using the session content.
+  const struggleMoods = ['anxious', 'stressed', 'overwhelmed', 'discouraged', 'frustrated', 'confused', 'worried'];
+  if (result.mood && struggleMoods.includes(result.mood)) {
+    const actions = (result.actionItems ?? []).slice(0, 2);
+    const actionNote = actions.length
+      ? ` Immediate steps identified: ${actions.join('; ')}.`
+      : '';
+    const coreSummary = shortText
+      ? shortText.slice(0, 160)
+      : `Recorded feeling ${result.mood}.`;
     await upsertMemory({
       memory_type: 'recurring_struggle',
-      title: `Recurring challenge: ${result.mood} state`,
-      summary: `Entries with ${result.mood} mood often surface action items requiring follow-through: ${(result.actionItems ?? []).slice(0, 2).join('; ')}`,
-      confidence: 65,
+      title: result.mood === 'anxious' || result.mood === 'worried'
+        ? 'Anxiety pattern under pressure'
+        : `Pattern: ${result.mood} state and its triggers`,
+      summary: `${coreSummary}${actionNote}`,
+      confidence: 68,
       related_session_ids: [sessionId],
-      suggested_actions: (result.actionItems ?? []).slice(0, 3),
+      suggested_actions: actions.length
+        ? actions.concat(['Identify the trigger before it escalates'])
+        : ['Identify what triggers this state', 'Build a 10-minute reset routine'],
       growth_indicators: [],
       scripture_refs: [],
     });
   }
 
-  // Recurring victory — grateful/joyful/hopeful moods signal a victory pattern
-  const victoryMoods = ['grateful', 'joyful', 'hopeful', 'peaceful', 'determined'];
+  // ── Recurring victory / strength ───────────────────────────────────────────
+  // Capture what specifically went well, so it can be recalled and built on.
+  const victoryMoods = ['grateful', 'joyful', 'hopeful', 'peaceful', 'determined', 'confident', 'encouraged'];
   if (result.mood && victoryMoods.includes(result.mood)) {
+    const coreSummary = shortText
+      ? shortText.slice(0, 160)
+      : `Entered a ${result.mood} state.`;
     await upsertMemory({
       memory_type: 'recurring_victory',
-      title: `Recurring strength: ${result.mood} entries`,
-      summary: result.summary
-        ? `Session recorded with ${result.mood} mood. ${result.summary.slice(0, 120)}`
-        : `Pattern of ${result.mood} disposition emerging across diary entries.`,
-      confidence: 72,
+      title: `Strength pattern: ${result.mood} state recorded`,
+      summary: `${coreSummary} This ${result.mood} disposition is a recurring strength worth protecting and replicating.`,
+      confidence: 74,
       related_session_ids: [sessionId],
-      suggested_actions: ['Note what conditions produce this positive state', 'Build habits around these conditions'],
-      growth_indicators: [
-        {
-          area: 'faith' as const,
-          direction: 'improving' as const,
-          evidence: `${result.mood} mood recorded on ${today}`,
-          since: today,
-        }
+      suggested_actions: [
+        'Note what created this state and repeat it',
+        'Use this entry as a reference when morale dips',
       ],
+      growth_indicators: [{
+        area: 'faith' as const,
+        direction: 'improving' as const,
+        evidence: `${result.mood} mood recorded on ${today}`,
+        since: today,
+      }],
       scripture_refs: [],
     });
   }
 
-  // Life-area patterns — record which life areas surface most
-  const lifeAreaTopics = (result.keyTopics ?? []).filter(t =>
-    ['faith', 'family', 'leadership', 'finances', 'health', 'relationships', 'business', 'career'].includes(t.toLowerCase())
-  );
-  for (const area of lifeAreaTopics.slice(0, 2)) {
-    const memType = area === 'leadership' ? 'leadership_insight'
-      : area === 'finances' ? 'financial_insight'
-      : area === 'health' ? 'health_insight'
-      : area === 'business' || area === 'career' ? 'business_insight'
-      : area === 'relationships' || area === 'family' ? 'relationship_insight'
-      : 'pattern_spiritual';
-
+  // ── Commitments / action items ─────────────────────────────────────────────
+  // If meaningful action items exist, write a commitment memory so they're not forgotten.
+  const actions = (result.actionItems ?? []).filter(a => a.trim().length > 5);
+  if (actions.length >= 2) {
+    const actionList = actions.slice(0, 4).map((a, i) => `${i + 1}. ${a}`).join(' ');
     await upsertMemory({
-      memory_type: memType as CoachMemory['memory_type'],
-      title: `Active focus area: ${area}`,
-      summary: `${area.charAt(0).toUpperCase() + area.slice(1)} is a recurring theme across your diary entries.`,
-      confidence: 60,
+      memory_type: 'pattern_behavior',
+      title: `Commitments made: ${actions[0].slice(0, 45)}${actions.length > 1 ? '…' : ''}`,
+      summary: `This session produced ${actions.length} concrete commitments: ${actionList}. Follow-through on these is part of the growth pattern.`,
+      confidence: 72,
       related_session_ids: [sessionId],
-      suggested_actions: [`Reflect on your ${area} goals regularly`, `Review patterns in your ${area} entries`],
+      suggested_actions: actions.slice(0, 3),
+      growth_indicators: [],
+      scripture_refs: [],
+    });
+  }
+
+  // ── Life-area insight ──────────────────────────────────────────────────────
+  // Use the actual session text to describe what surfaced in that area.
+  const areaTypeMap: Record<string, CoachMemory['memory_type']> = {
+    leadership: 'leadership_insight',
+    finances: 'financial_insight',
+    health: 'health_insight',
+    business: 'business_insight',
+    career: 'business_insight',
+    relationships: 'relationship_insight',
+    family: 'relationship_insight',
+    faith: 'pattern_spiritual',
+    spiritual: 'pattern_spiritual',
+  };
+  const lifeAreaTopics = (result.keyTopics ?? []).filter(t => areaTypeMap[t.toLowerCase()]);
+
+  for (const area of lifeAreaTopics.slice(0, 2)) {
+    const areaKey = area.toLowerCase();
+    const areaText = shortText
+      ? `From this entry: ${shortText.slice(0, 140)}${shortText.length > 140 ? '...' : ''}`
+      : `${area} was a primary focus in this session.`;
+    await upsertMemory({
+      memory_type: areaTypeMap[areaKey],
+      title: `${area.charAt(0).toUpperCase() + area.slice(1)} — active theme`,
+      summary: areaText,
+      confidence: 63,
+      related_session_ids: [sessionId],
+      suggested_actions: [
+        `Review your ${area} priorities regularly`,
+        `Note what progress looks like in ${area}`,
+      ],
       growth_indicators: [],
       scripture_refs: [],
     });

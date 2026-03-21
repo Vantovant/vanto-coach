@@ -29,23 +29,105 @@ import { Badge } from '@/components/ui/badge';
 import { ScrollArea, ScrollBar } from '@/components/ui/scroll-area';
 import { Separator } from '@/components/ui/separator';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
-import { mockDailyBriefing } from '@/data/mock-data';
 import { useCrossReferences } from '@/hooks/useCrossReferences';
 import { useBibleVerse } from '@/hooks/useBibleVerse';
 import { buildScriptureUrlFromReference, buildStudyUrl } from '@/lib/bible/navigation';
 import { cn } from '@/lib/utils';
 import { useRouter } from 'next/navigation';
-import { getActionItems, getPrayerPoints, type PrayerPointRow } from '@/lib/supabase/db';
-import type { CoachActionItem } from '@/types/coach';
+import { getActionItems, getPrayerPoints, getSessions, type PrayerPointRow } from '@/lib/supabase/db';
+import type { CoachActionItem, CoachSession } from '@/types/coach';
 import { useAuth } from '@/context/AuthContext';
+
+// ─── Daily scripture rotation ─────────────────────────────────────────────────
+// 30 curated KJV verses — rotated deterministically by day-of-year so each day
+// feels fresh without any external API call. Easily extended.
+const DAILY_VERSES = [
+  { book: 'Proverbs', chapter: 3, verse_start: 5, verse_end: 6, text: 'Trust in the LORD with all thine heart; and lean not unto thine own understanding. In all thy ways acknowledge him, and he shall direct thy paths.', translation: 'KJV' },
+  { book: 'Philippians', chapter: 4, verse_start: 13, text: 'I can do all things through Christ which strengtheneth me.', translation: 'KJV' },
+  { book: 'Isaiah', chapter: 40, verse_start: 31, text: 'But they that wait upon the LORD shall renew their strength; they shall mount up with wings as eagles; they shall run, and not be weary; and they shall walk, and not faint.', translation: 'KJV' },
+  { book: 'Jeremiah', chapter: 29, verse_start: 11, text: 'For I know the thoughts that I think toward you, saith the LORD, thoughts of peace, and not of evil, to give you an expected end.', translation: 'KJV' },
+  { book: 'Romans', chapter: 8, verse_start: 28, text: 'And we know that all things work together for good to them that love God, to them who are the called according to his purpose.', translation: 'KJV' },
+  { book: 'Psalm', chapter: 46, verse_start: 1, text: 'God is our refuge and strength, a very present help in trouble.', translation: 'KJV' },
+  { book: 'Matthew', chapter: 6, verse_start: 33, text: 'But seek ye first the kingdom of God, and his righteousness; and all these things shall be added unto you.', translation: 'KJV' },
+  { book: 'Joshua', chapter: 1, verse_start: 9, text: 'Be strong and courageous. Do not be afraid; do not be discouraged, for the LORD your God will be with you wherever you go.', translation: 'KJV' },
+  { book: '2 Timothy', chapter: 1, verse_start: 7, text: 'For God hath not given us the spirit of fear; but of power, and of love, and of a sound mind.', translation: 'KJV' },
+  { book: 'Psalm', chapter: 23, verse_start: 1, text: 'The LORD is my shepherd; I shall not want.', translation: 'KJV' },
+  { book: 'Colossians', chapter: 3, verse_start: 23, text: 'And whatsoever ye do, do it heartily, as to the Lord, and not unto men.', translation: 'KJV' },
+  { book: 'Galatians', chapter: 5, verse_start: 22, verse_end: 23, text: 'But the fruit of the Spirit is love, joy, peace, longsuffering, gentleness, goodness, faith, Meekness, temperance: against such there is no law.', translation: 'KJV' },
+  { book: 'Psalm', chapter: 37, verse_start: 4, text: 'Delight thyself also in the LORD; and he shall give thee the desires of thine heart.', translation: 'KJV' },
+  { book: 'Ephesians', chapter: 6, verse_start: 10, text: 'Finally, my brethren, be strong in the Lord, and in the power of his might.', translation: 'KJV' },
+  { book: 'Philippians', chapter: 4, verse_start: 6, verse_end: 7, text: 'Be careful for nothing; but in every thing by prayer and supplication with thanksgiving let your requests be made known unto God. And the peace of God, which passeth all understanding, shall keep your hearts and minds through Christ Jesus.', translation: 'KJV' },
+  { book: 'James', chapter: 1, verse_start: 5, text: 'If any of you lack wisdom, let him ask of God, that giveth to all men liberally, and upbraideth not; and it shall be given him.', translation: 'KJV' },
+  { book: '1 Peter', chapter: 5, verse_start: 7, text: 'Casting all your care upon him; for he careth for you.', translation: 'KJV' },
+  { book: 'Romans', chapter: 12, verse_start: 2, text: 'And be not conformed to this world: but be ye transformed by the renewing of your mind, that ye may prove what is that good, and acceptable, and perfect, will of God.', translation: 'KJV' },
+  { book: 'Psalm', chapter: 119, verse_start: 105, text: 'Thy word is a lamp unto my feet, and a light unto my path.', translation: 'KJV' },
+  { book: 'Isaiah', chapter: 41, verse_start: 10, text: 'Fear thou not; for I am with thee: be not dismayed; for I am thy God: I will strengthen thee; yea, I will help thee; yea, I will uphold thee with the right hand of my righteousness.', translation: 'KJV' },
+  { book: 'Hebrews', chapter: 11, verse_start: 1, text: 'Now faith is the substance of things hoped for, the evidence of things not seen.', translation: 'KJV' },
+  { book: 'Proverbs', chapter: 16, verse_start: 3, text: 'Commit thy works unto the LORD, and thy thoughts shall be established.', translation: 'KJV' },
+  { book: 'Matthew', chapter: 11, verse_start: 28, text: 'Come unto me, all ye that labour and are heavy laden, and I will give you rest.', translation: 'KJV' },
+  { book: 'Psalm', chapter: 27, verse_start: 1, text: 'The LORD is my light and my salvation; whom shall I fear? the LORD is the strength of my life; of whom shall I be afraid?', translation: 'KJV' },
+  { book: 'John', chapter: 14, verse_start: 27, text: 'Peace I leave with you, my peace I give unto you: not as the world giveth, give I unto you. Let not your heart be troubled, neither let it be afraid.', translation: 'KJV' },
+  { book: 'Proverbs', chapter: 11, verse_start: 14, text: 'Where no counsel is, the people fall: but in the multitude of counsellors there is safety.', translation: 'KJV' },
+  { book: 'Psalm', chapter: 1, verse_start: 1, verse_end: 2, text: 'Blessed is the man that walketh not in the counsel of the ungodly, nor standeth in the way of sinners, nor sitteth in the seat of the scornful. But his delight is in the law of the LORD; and in his law doth he meditate day and night.', translation: 'KJV' },
+  { book: 'Philippians', chapter: 4, verse_start: 19, text: 'But my God shall supply all your need according to his riches in glory by Christ Jesus.', translation: 'KJV' },
+  { book: 'Proverbs', chapter: 18, verse_start: 21, text: 'Death and life are in the power of the tongue: and they that love it shall eat the fruit thereof.', translation: 'KJV' },
+  { book: 'Ecclesiastes', chapter: 4, verse_start: 9, verse_end: 10, text: 'Two are better than one; because they have a good reward for their labour. For if they fall, the one will lift up his fellow.', translation: 'KJV' },
+] as const;
+
+function getDailyVerse() {
+  const now = new Date();
+  const start = new Date(now.getFullYear(), 0, 0);
+  const dayOfYear = Math.floor((now.getTime() - start.getTime()) / 86_400_000);
+  return DAILY_VERSES[dayOfYear % DAILY_VERSES.length];
+}
+
+// ─── Briefing derivation from real session data ───────────────────────────────
+function deriveBriefing(
+  latestSession: CoachSession | null,
+  actionItems: CoachActionItem[],
+  prayerPoints: PrayerPointRow[]
+) {
+  const hour = new Date().getHours();
+  const greetingWord = hour < 12 ? 'morning' : hour < 17 ? 'afternoon' : 'evening';
+
+  const greeting = latestSession?.summary
+    ? `This ${greetingWord}, carry forward what your last entry revealed: ${latestSession.summary.slice(0, 120)}${latestSession.summary.length > 120 ? '...' : ''}`
+    : `Welcome back. Record a new entry to begin today's reflection.`;
+
+  const topAreas = latestSession?.life_areas?.slice(0, 2) ?? [];
+  const todaysFocus = topAreas.length > 0
+    ? `Your recent focus areas are ${topAreas.join(' and ')}. Bring intentionality to these today.`
+    : 'Be present and intentional in every area of your life today.';
+
+  const spiritualFocus = latestSession?.spiritual_topics?.length
+    ? `Continue exploring the spiritual themes from your last entry: ${latestSession.spiritual_topics.slice(0, 2).join(', ')}.`
+    : 'Begin your day with prayer and Scripture before anything else.';
+
+  const topActionItems = actionItems
+    .filter(a => a.status === 'pending' || a.status === 'approved')
+    .slice(0, 3)
+    .map(a => ({ title: a.title, priority: a.priority, category: a.category, due_date: a.due_date }));
+
+  const prayerAreas = prayerPoints.slice(0, 3).map(p => p.category ?? p.content.slice(0, 30));
+
+  const prayerTheme = prayerPoints.length > 0
+    ? `You have ${prayerPoints.length} active prayer ${prayerPoints.length === 1 ? 'request' : 'requests'} to bring before God today.`
+    : 'Bring your needs and gratitude before God in prayer today.';
+
+  const patternInsight = latestSession?.mood
+    ? `Your last recorded mood was ${latestSession.mood}. Notice what shaped it and bring that awareness into today.`
+    : null;
+
+  return { greeting, todaysFocus, spiritualFocus, topActionItems, prayerAreas, prayerTheme, patternInsight };
+}
 
 export function TodayTab() {
   const { user } = useAuth();
-  const briefing = mockDailyBriefing;
   const [formattedDate, setFormattedDate] = React.useState('');
   const [greeting, setGreeting] = React.useState('');
   const [actionItems, setActionItems] = React.useState<CoachActionItem[]>([]);
   const [prayerPoints, setPrayerPoints] = React.useState<PrayerPointRow[]>([]);
+  const [latestSession, setLatestSession] = React.useState<CoachSession | null>(null);
 
   React.useEffect(() => {
     const today = new Date();
@@ -57,10 +139,20 @@ export function TodayTab() {
     if (!user) return;
     getActionItems().then(setActionItems);
     getPrayerPoints('active').then(setPrayerPoints);
+    getSessions().then(sessions => setLatestSession(sessions[0] ?? null));
   }, [user]);
 
+  // Derive all briefing content from real persisted data
+  const briefing = React.useMemo(
+    () => deriveBriefing(latestSession, actionItems, prayerPoints),
+    [latestSession, actionItems, prayerPoints]
+  );
+
+  // Daily verse — deterministic rotation by day, no external API
+  const dailyVerse = React.useMemo(() => getDailyVerse(), []);
+
   // Get the scripture reference string for cross-references
-  const scriptureRef = `${briefing.scripture_for_today.book} ${briefing.scripture_for_today.chapter}:${briefing.scripture_for_today.verse_start}`;
+  const scriptureRef = `${dailyVerse.book} ${dailyVerse.chapter}:${dailyVerse.verse_start}`;
 
   return (
     <div className="pb-24 md:pb-8">
@@ -80,6 +172,7 @@ export function TodayTab() {
               <p className="text-lg text-muted-foreground max-w-2xl leading-relaxed">
                 {briefing.greeting}
               </p>
+
             </div>
 
             {/* Quick Actions */}
@@ -116,7 +209,7 @@ export function TodayTab() {
             </CardHeader>
             <CardContent>
               <p className="text-foreground leading-relaxed">
-                {briefing.todays_focus}
+                {briefing.todaysFocus}
               </p>
             </CardContent>
           </Card>
@@ -133,7 +226,7 @@ export function TodayTab() {
             </CardHeader>
             <CardContent>
               <p className="text-foreground leading-relaxed">
-                {briefing.spiritual_focus}
+                {briefing.spiritualFocus}
               </p>
             </CardContent>
           </Card>
@@ -141,7 +234,7 @@ export function TodayTab() {
 
         {/* Scripture for Today with Cross-References */}
         <ScriptureForTodayCard
-          scripture={briefing.scripture_for_today}
+          scripture={dailyVerse}
           scriptureRef={scriptureRef}
         />
 
@@ -166,7 +259,11 @@ export function TodayTab() {
               </div>
             </CardHeader>
             <CardContent className="space-y-2.5">
-              {briefing.top_action_items.map((action, index) => (
+              {briefing.topActionItems.length === 0 ? (
+                <p className="text-sm text-muted-foreground py-2">
+                  No pending actions yet. Record a diary entry to generate action items.
+                </p>
+              ) : briefing.topActionItems.map((action, index) => (
                 <div
                   key={index}
                   className="flex items-start gap-3 p-3 rounded-lg bg-muted/40 hover:bg-muted/60 transition-colors group cursor-pointer"
@@ -183,7 +280,7 @@ export function TodayTab() {
                     <p className="font-medium text-sm group-hover:text-foreground transition-colors">{action.title}</p>
                     <div className="flex items-center gap-2 mt-1.5">
                       <Badge variant="outline" className="text-[10px] capitalize font-normal">
-                        {action.category}
+                        {action.category ?? 'general'}
                       </Badge>
                       {action.due_date && (
                         <span className="text-xs text-muted-foreground flex items-center gap-1">
@@ -210,26 +307,17 @@ export function TodayTab() {
             </CardHeader>
             <CardContent className="space-y-4">
               <div>
-                <p className="font-medium text-sm mb-2.5">{briefing.prayer_focus.theme}</p>
-                <div className="flex flex-wrap gap-2">
-                  {briefing.prayer_focus.areas.map((area, index) => (
-                    <Badge key={index} variant="secondary" className="text-xs font-normal">
-                      {area}
-                    </Badge>
-                  ))}
-                </div>
+                <p className="font-medium text-sm mb-2.5">{briefing.prayerTheme}</p>
+                {briefing.prayerAreas.length > 0 && (
+                  <div className="flex flex-wrap gap-2">
+                    {briefing.prayerAreas.map((area, index) => (
+                      <Badge key={index} variant="secondary" className="text-xs font-normal">
+                        {area}
+                      </Badge>
+                    ))}
+                  </div>
+                )}
               </div>
-              {briefing.prayer_focus.scripture && (
-                <div className="p-3 rounded-lg bg-[hsl(var(--scripture))]/40 border border-accent/15">
-                  <p className="text-xs text-muted-foreground mb-1.5">
-                    {briefing.prayer_focus.scripture.book} {briefing.prayer_focus.scripture.chapter}:
-                    {briefing.prayer_focus.scripture.verse_start}
-                  </p>
-                  <p className="text-sm italic font-serif leading-relaxed">
-                    "{briefing.prayer_focus.scripture.text.slice(0, 150)}..."
-                  </p>
-                </div>
-              )}
               <Button variant="outline" className="w-full gap-2">
                 <Heart className="h-4 w-4" />
                 Start Prayer Time
@@ -238,8 +326,8 @@ export function TodayTab() {
           </Card>
         </div>
 
-        {/* Pattern Insight */}
-        {briefing.pattern_insight && (
+        {/* Pattern Insight — only shown when there's a real session to derive from */}
+        {briefing.patternInsight && (
           <Card className="card-premium border-l-[3px] border-l-primary animate-fade-in" style={{ animationDelay: '300ms' }}>
             <CardHeader className="pb-2">
               <div className="flex items-center gap-2.5">
@@ -251,7 +339,7 @@ export function TodayTab() {
             </CardHeader>
             <CardContent>
               <p className="text-muted-foreground leading-relaxed">
-                {briefing.pattern_insight}
+                {briefing.patternInsight}
               </p>
               <Link href="/coach?tab=memory">
                 <Button variant="link" size="sm" className="px-0 mt-3 gap-1.5 text-primary">
@@ -263,87 +351,50 @@ export function TodayTab() {
           </Card>
         )}
 
-        {/* Linked Items from VantoOS Plan */}
-        <div className="space-y-4 animate-fade-in" style={{ animationDelay: '350ms' }}>
-          <div className="flex items-center justify-between">
-            <h2 className="text-lg font-serif font-semibold">From Your Plan</h2>
-            <Link href="/plan">
-              <Button variant="ghost" size="sm" className="text-xs gap-1 text-muted-foreground">
-                Open Plan Hub
-                <ChevronRight className="h-3 w-3" />
-              </Button>
-            </Link>
-          </div>
+        {/* All Coach Action Items */}
+        {actionItems.length > 0 && (
+          <div className="space-y-4 animate-fade-in" style={{ animationDelay: '350ms' }}>
+            <div className="flex items-center justify-between">
+              <h2 className="text-lg font-serif font-semibold">Your Actions</h2>
+              <Link href="/coach?tab=action-plans">
+                <Button variant="ghost" size="sm" className="text-xs gap-1 text-muted-foreground">
+                  View All
+                  <ChevronRight className="h-3 w-3" />
+                </Button>
+              </Link>
+            </div>
 
-          <ScrollArea className="w-full">
-            <div className="flex gap-4 pb-4">
-              {/* Tasks */}
-              {briefing.linked_tasks.map((task) => (
-                <Card key={task.id} className="card-premium min-w-[280px] shrink-0 hover:shadow-md transition-shadow">
-                  <CardContent className="p-4">
-                    <div className="flex items-center gap-2 text-primary mb-2.5">
-                      <CheckCircle2 className="h-4 w-4" />
-                      <span className="text-[10px] font-semibold uppercase tracking-wider">Task</span>
-                    </div>
-                    <p className="font-medium text-sm mb-2.5">{task.title}</p>
-                    <div className="flex items-center gap-2">
-                      {task.priority && (
+            <ScrollArea className="w-full">
+              <div className="flex gap-4 pb-4">
+                {actionItems.slice(0, 8).map((item) => (
+                  <Card key={item.id} className="card-premium min-w-[260px] shrink-0 hover:shadow-md transition-shadow">
+                    <CardContent className="p-4">
+                      <div className="flex items-center gap-2 text-primary mb-2.5">
+                        <CheckCircle2 className="h-4 w-4" />
+                        <span className="text-[10px] font-semibold uppercase tracking-wider">Action</span>
+                      </div>
+                      <p className="font-medium text-sm mb-2.5 line-clamp-2">{item.title}</p>
+                      <div className="flex items-center gap-2">
                         <Badge
-                          variant={task.priority === 'high' ? 'destructive' : 'secondary'}
+                          variant={item.priority === 'critical' || item.priority === 'high' ? 'destructive' : 'secondary'}
                           className="text-[10px]"
                         >
-                          {task.priority}
+                          {item.priority}
                         </Badge>
-                      )}
-                      {task.due_date && (
-                        <span className="text-xs text-muted-foreground">
-                          Due {format(new Date(task.due_date), 'MMM d')}
-                        </span>
-                      )}
-                    </div>
-                  </CardContent>
-                </Card>
-              ))}
-
-              {/* Meetings */}
-              {briefing.linked_meetings.map((meeting) => (
-                <Card key={meeting.id} className="card-premium min-w-[280px] shrink-0 hover:shadow-md transition-shadow">
-                  <CardContent className="p-4">
-                    <div className="flex items-center gap-2 text-[hsl(var(--spiritual))] mb-2.5">
-                      <Calendar className="h-4 w-4" />
-                      <span className="text-[10px] font-semibold uppercase tracking-wider">Meeting</span>
-                    </div>
-                    <p className="font-medium text-sm mb-2.5">{meeting.title}</p>
-                    {meeting.due_date && (
-                      <span className="text-xs text-muted-foreground" suppressHydrationWarning>
-                        {format(new Date(meeting.due_date), 'h:mm a')}
-                      </span>
-                    )}
-                  </CardContent>
-                </Card>
-              ))}
-
-              {/* Reminders */}
-              {briefing.linked_reminders.map((reminder) => (
-                <Card key={reminder.id} className="card-premium min-w-[280px] shrink-0 hover:shadow-md transition-shadow">
-                  <CardContent className="p-4">
-                    <div className="flex items-center gap-2 text-warning mb-2.5">
-                      <Clock className="h-4 w-4" />
-                      <span className="text-[10px] font-semibold uppercase tracking-wider">Reminder</span>
-                    </div>
-                    <p className="font-medium text-sm mb-2.5">{reminder.title}</p>
-                    {reminder.due_date && (
-                      <span className="text-xs text-muted-foreground" suppressHydrationWarning>
-                        {format(new Date(reminder.due_date), 'h:mm a')}
-                      </span>
-                    )}
-                  </CardContent>
-                </Card>
-              ))}
-            </div>
-            <ScrollBar orientation="horizontal" />
-          </ScrollArea>
-        </div>
+                        {item.category && (
+                          <Badge variant="outline" className="text-[10px] capitalize font-normal">
+                            {item.category}
+                          </Badge>
+                        )}
+                      </div>
+                    </CardContent>
+                  </Card>
+                ))}
+              </div>
+              <ScrollBar orientation="horizontal" />
+            </ScrollArea>
+          </div>
+        )}
 
         {/* Active Prayer Requests */}
         <Card className="card-premium animate-fade-in" style={{ animationDelay: '400ms' }}>

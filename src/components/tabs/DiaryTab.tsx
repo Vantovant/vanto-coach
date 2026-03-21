@@ -52,9 +52,9 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
-import type { CoachSession, SessionMood, LifeArea } from '@/types/coach';
+import type { CoachSession, CoachMemory, SessionMood, LifeArea } from '@/types/coach';
 import { useSessions } from '@/hooks/useSessions';
-import { createSession, softDeleteSession } from '@/lib/supabase/db';
+import { createSession, softDeleteSession, upsertMemory } from '@/lib/supabase/db';
 import { uploadAudio } from '@/lib/supabase/storage';
 import { cn } from '@/lib/utils';
 import { VoiceRecorder, type ExtendedRecordingResult } from '@/components/diary/VoiceRecorder';
@@ -161,7 +161,12 @@ export function DiaryTab() {
         console.error('[diary] createSession threw:', saveErr);
       }
 
-      // 5. Optimistic local update (use saved row or build a local placeholder)
+      // 5. Write memory rows from AI-extracted content (fire-and-forget — non-blocking)
+      if (saved && (result.prayerPoints?.length || result.actionItems?.length || result.mood)) {
+        void writeMemoriesFromSession(saved.id, result);
+      }
+
+      // 6. Optimistic local update (use saved row or build a local placeholder)
       const sessionToShow: CoachSession = saved ?? {
         id: `session-local-${Date.now()}`,
         user_id: '',
@@ -395,6 +400,99 @@ export function DiaryTab() {
       </Dialog>
     </div>
   );
+}
+
+// ─────────────────────────────────────────────
+// MEMORY EXTRACTION
+// ─────────────────────────────────────────────
+
+/**
+ * Derives and writes coach_memory rows from a just-saved diary session.
+ * Each category is only written when the session has relevant content.
+ * All calls are upserts so repeated saves on the same theme reinforce confidence.
+ */
+async function writeMemoriesFromSession(
+  sessionId: string,
+  result: ExtendedRecordingResult
+): Promise<void> {
+  const today = new Date().toISOString().split('T')[0];
+
+  // Prayer burden — any prayer points become a living memory
+  if (result.prayerPoints && result.prayerPoints.length > 0) {
+    await upsertMemory({
+      memory_type: 'prayer_burden',
+      title: 'Active prayer needs from diary',
+      summary: result.prayerPoints.slice(0, 3).join('; '),
+      confidence: 70,
+      related_session_ids: [sessionId],
+      suggested_actions: ['Continue praying over these areas', 'Review prayer points weekly'],
+      growth_indicators: [],
+      scripture_refs: [],
+    });
+  }
+
+  // Recurring struggle — negative or anxious moods with action items signal a struggle pattern
+  const struggleMoods = ['anxious', 'stressed', 'overwhelmed', 'discouraged', 'frustrated', 'confused'];
+  if (result.mood && struggleMoods.includes(result.mood) && result.actionItems?.length) {
+    await upsertMemory({
+      memory_type: 'recurring_struggle',
+      title: `Recurring challenge: ${result.mood} state`,
+      summary: `Entries with ${result.mood} mood often surface action items requiring follow-through: ${(result.actionItems ?? []).slice(0, 2).join('; ')}`,
+      confidence: 65,
+      related_session_ids: [sessionId],
+      suggested_actions: (result.actionItems ?? []).slice(0, 3),
+      growth_indicators: [],
+      scripture_refs: [],
+    });
+  }
+
+  // Recurring victory — grateful/joyful/hopeful moods signal a victory pattern
+  const victoryMoods = ['grateful', 'joyful', 'hopeful', 'peaceful', 'determined'];
+  if (result.mood && victoryMoods.includes(result.mood)) {
+    await upsertMemory({
+      memory_type: 'recurring_victory',
+      title: `Recurring strength: ${result.mood} entries`,
+      summary: result.summary
+        ? `Session recorded with ${result.mood} mood. ${result.summary.slice(0, 120)}`
+        : `Pattern of ${result.mood} disposition emerging across diary entries.`,
+      confidence: 72,
+      related_session_ids: [sessionId],
+      suggested_actions: ['Note what conditions produce this positive state', 'Build habits around these conditions'],
+      growth_indicators: [
+        {
+          area: 'faith' as const,
+          direction: 'improving' as const,
+          evidence: `${result.mood} mood recorded on ${today}`,
+          since: today,
+        }
+      ],
+      scripture_refs: [],
+    });
+  }
+
+  // Life-area patterns — record which life areas surface most
+  const lifeAreaTopics = (result.keyTopics ?? []).filter(t =>
+    ['faith', 'family', 'leadership', 'finances', 'health', 'relationships', 'business', 'career'].includes(t.toLowerCase())
+  );
+  for (const area of lifeAreaTopics.slice(0, 2)) {
+    const memType = area === 'leadership' ? 'leadership_insight'
+      : area === 'finances' ? 'financial_insight'
+      : area === 'health' ? 'health_insight'
+      : area === 'business' || area === 'career' ? 'business_insight'
+      : area === 'relationships' || area === 'family' ? 'relationship_insight'
+      : 'pattern_spiritual';
+
+    await upsertMemory({
+      memory_type: memType as CoachMemory['memory_type'],
+      title: `Active focus area: ${area}`,
+      summary: `${area.charAt(0).toUpperCase() + area.slice(1)} is a recurring theme across your diary entries.`,
+      confidence: 60,
+      related_session_ids: [sessionId],
+      suggested_actions: [`Reflect on your ${area} goals regularly`, `Review patterns in your ${area} entries`],
+      growth_indicators: [],
+      scripture_refs: [],
+    });
+  }
 }
 
 function SessionCard({

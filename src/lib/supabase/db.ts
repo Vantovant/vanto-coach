@@ -244,6 +244,88 @@ export async function getPrayerPoints(status?: 'active' | 'answered' | 'continui
 // MEMORIES
 // ─────────────────────────────────────────────
 
+export interface UpsertMemoryInput {
+  memory_type: CoachMemory['memory_type'];
+  title: string;
+  summary: string;
+  confidence: number;
+  related_session_ids: string[];
+  suggested_actions: string[];
+  growth_indicators: CoachMemory['growth_indicators'];
+  scripture_refs: CoachMemory['scripture_refs'];
+}
+
+/**
+ * Insert a new memory row or update an existing one that shares the same
+ * (user_id, memory_type, title) combination (title is used as a natural key).
+ * Returns the upserted row or null on failure.
+ */
+export async function upsertMemory(input: UpsertMemoryInput): Promise<CoachMemory | null> {
+  const supabase = createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) { console.error('[db] upsertMemory: no authenticated user'); return null; }
+
+  const now = new Date().toISOString();
+
+  // Try to find an existing memory with same type+title for this user
+  const { data: existing } = await supabase
+    .from('coach_memories')
+    .select('id, occurrence_count, first_seen_at, related_session_ids')
+    .eq('user_id', user.id)
+    .eq('memory_type', input.memory_type)
+    .eq('title', input.title)
+    .maybeSingle();
+
+  if (existing) {
+    // Merge session IDs without duplicates
+    const mergedIds = Array.from(
+      new Set([...(existing.related_session_ids ?? []), ...input.related_session_ids])
+    );
+    const { data, error } = await supabase
+      .from('coach_memories')
+      .update({
+        summary: input.summary,
+        confidence: Math.min(99, input.confidence + 3), // confidence grows with repetition
+        occurrence_count: (existing.occurrence_count ?? 1) + 1,
+        last_seen_at: now,
+        related_session_ids: mergedIds,
+        suggested_actions: input.suggested_actions,
+        growth_indicators: input.growth_indicators,
+        scripture_refs: input.scripture_refs,
+        updated_at: now,
+      })
+      .eq('id', existing.id)
+      .select()
+      .single();
+    if (error) { console.error('[db] upsertMemory update error:', error.message); return null; }
+    return data as CoachMemory;
+  }
+
+  // Insert new memory
+  const { data, error } = await supabase
+    .from('coach_memories')
+    .insert({
+      user_id: user.id,
+      memory_type: input.memory_type,
+      title: input.title,
+      summary: input.summary,
+      confidence: input.confidence,
+      first_seen_at: now,
+      last_seen_at: now,
+      occurrence_count: 1,
+      related_session_ids: input.related_session_ids,
+      suggested_actions: input.suggested_actions,
+      growth_indicators: input.growth_indicators,
+      scripture_refs: input.scripture_refs,
+      is_pinned: false,
+      is_archived: false,
+    })
+    .select()
+    .single();
+  if (error) { console.error('[db] upsertMemory insert error:', error.message); return null; }
+  return data as CoachMemory;
+}
+
 export async function getMemories(): Promise<CoachMemory[]> {
   const supabase = createClient();
   const { data, error } = await supabase

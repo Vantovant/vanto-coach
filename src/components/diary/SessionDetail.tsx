@@ -22,6 +22,7 @@ import {
   Wand2,
   Link2,
   Loader2,
+  Trash2,
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -53,9 +54,10 @@ import { useRouter } from 'next/navigation';
 interface SessionDetailProps {
   session: CoachSession;
   onClose: () => void;
+  onDelete?: (id: string) => Promise<void>;
 }
 
-export function SessionDetail({ session, onClose }: SessionDetailProps) {
+export function SessionDetail({ session, onClose, onDelete }: SessionDetailProps) {
   const audioRef = React.useRef<HTMLAudioElement>(null);
   const [isPlaying, setIsPlaying] = React.useState(false);
   const [playbackProgress, setPlaybackProgress] = React.useState(0);
@@ -64,6 +66,8 @@ export function SessionDetail({ session, onClose }: SessionDetailProps) {
   const [showFullTranscript, setShowFullTranscript] = React.useState(false);
   // Resolved playback URL (may need signed URL for Supabase Storage paths)
   const [resolvedAudioUrl, setResolvedAudioUrl] = React.useState<string | null>(null);
+  // Delete state
+  const [deleteState, setDeleteState] = React.useState<'idle' | 'confirm' | 'deleting'>('idle');
 
   React.useEffect(() => {
     const raw = session.audio_url;
@@ -174,18 +178,52 @@ export function SessionDetail({ session, onClose }: SessionDetailProps) {
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end">
-                <DropdownMenuItem>
+                <DropdownMenuItem
+                  onClick={() => {
+                    if (session.raw_transcript) {
+                      navigator.clipboard.writeText(session.raw_transcript).catch(() => {});
+                    }
+                  }}
+                >
                   <Copy className="h-4 w-4 mr-2" />
                   Copy Transcript
                 </DropdownMenuItem>
-                <DropdownMenuItem>
-                  <Share2 className="h-4 w-4 mr-2" />
-                  Share
-                </DropdownMenuItem>
                 <DropdownMenuSeparator />
-                <DropdownMenuItem className="text-destructive">
-                  Delete Entry
-                </DropdownMenuItem>
+                {deleteState === 'idle' && (
+                  <DropdownMenuItem
+                    className="text-destructive focus:text-destructive"
+                    onClick={() => setDeleteState('confirm')}
+                  >
+                    <Trash2 className="h-4 w-4 mr-2" />
+                    Delete Entry
+                  </DropdownMenuItem>
+                )}
+                {deleteState === 'confirm' && (
+                  <>
+                    <DropdownMenuItem
+                      className="text-destructive focus:text-destructive font-medium"
+                      onClick={async () => {
+                        if (!onDelete) return;
+                        setDeleteState('deleting');
+                        await onDelete(session.id);
+                        setDeleteState('idle');
+                      }}
+                    >
+                      <Trash2 className="h-4 w-4 mr-2" />
+                      Confirm Delete
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => setDeleteState('idle')}>
+                      <X className="h-4 w-4 mr-2" />
+                      Cancel
+                    </DropdownMenuItem>
+                  </>
+                )}
+                {deleteState === 'deleting' && (
+                  <DropdownMenuItem disabled>
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    Deleting…
+                  </DropdownMenuItem>
+                )}
               </DropdownMenuContent>
             </DropdownMenu>
             <Button variant="ghost" size="icon" className="h-8 w-8" onClick={onClose}>

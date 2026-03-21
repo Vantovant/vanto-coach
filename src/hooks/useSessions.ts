@@ -11,6 +11,7 @@ export interface UseSessionsReturn {
   error: string | null;
   refresh: () => Promise<void>;
   prependSession: (session: CoachSession) => void;
+  removeSession: (id: string) => void;
 }
 
 export function useSessions(): UseSessionsReturn {
@@ -41,5 +42,9 @@ export function useSessions(): UseSessionsReturn {
     setSessions(prev => [session, ...prev]);
   }, []);
 
-  return { sessions, loading, error, refresh: load, prependSession };
+  const removeSession = React.useCallback((id: string) => {
+    setSessions(prev => prev.filter(s => s.id !== id));
+  }, []);
+
+  return { sessions, loading, error, refresh: load, prependSession, removeSession };
 }

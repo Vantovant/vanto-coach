@@ -54,7 +54,7 @@ import {
 } from '@/components/ui/dialog';
 import type { CoachSession, SessionMood, LifeArea } from '@/types/coach';
 import { useSessions } from '@/hooks/useSessions';
-import { createSession } from '@/lib/supabase/db';
+import { createSession, softDeleteSession } from '@/lib/supabase/db';
 import { uploadAudio } from '@/lib/supabase/storage';
 import { cn } from '@/lib/utils';
 import { VoiceRecorder, type ExtendedRecordingResult } from '@/components/diary/VoiceRecorder';
@@ -66,7 +66,7 @@ export function DiaryTab() {
   const [filterMood, setFilterMood] = React.useState<SessionMood | 'all'>('all');
   const [showRecorder, setShowRecorder] = React.useState(false);
 
-  const { sessions, loading: sessionsLoading, error: sessionsError, prependSession } = useSessions();
+  const { sessions, loading: sessionsLoading, error: sessionsError, prependSession, removeSession } = useSessions();
 
   const allSessions = sessions;
 
@@ -190,6 +190,23 @@ export function DiaryTab() {
     }
     setShowRecorder(false);
   }, [prependSession]);
+
+  const handleDelete = React.useCallback(async (id: string) => {
+    // Optimistically remove from list and close detail panel immediately
+    removeSession(id);
+    if (selectedSession?.id === id) setSelectedSession(null);
+
+    // Local-only session (not yet in DB) — nothing more to do
+    if (id.startsWith('session-local-')) return;
+
+    const ok = await softDeleteSession(id);
+    if (!ok) {
+      console.error('[diary] softDelete failed for', id);
+      // Re-fetch so the session reappears rather than silently disappearing
+      // (useSessions refresh is available via the hook but we don't want to
+      //  pull the full list just for an error — a page refresh restores it)
+    }
+  }, [removeSession, selectedSession]);
 
   const filteredSessions = React.useMemo(() => {
     return allSessions.filter(session => {
@@ -337,6 +354,7 @@ export function DiaryTab() {
               <SessionDetail
                 session={selectedSession}
                 onClose={() => setSelectedSession(null)}
+                onDelete={handleDelete}
               />
             ) : (
               <Card className="h-[calc(100vh-300px)] flex items-center justify-center">

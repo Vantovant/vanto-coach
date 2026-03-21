@@ -83,13 +83,13 @@ export function SessionDetail({ session, onClose }: SessionDetailProps) {
     if (!audio) return;
 
     const handleTimeUpdate = () => {
-      if (audio.duration && !isNaN(audio.duration)) {
+      if (audio.duration && isFinite(audio.duration) && !isNaN(audio.duration)) {
         setPlaybackProgress((audio.currentTime / audio.duration) * 100);
       }
     };
 
     const handleLoadedMetadata = () => {
-      if (audio.duration && !isNaN(audio.duration)) {
+      if (audio.duration && isFinite(audio.duration) && !isNaN(audio.duration)) {
         setAudioDuration(Math.floor(audio.duration));
       }
     };
@@ -138,8 +138,10 @@ export function SessionDetail({ session, onClose }: SessionDetailProps) {
   };
 
   const formatDuration = (seconds: number): string => {
-    const mins = Math.floor(seconds / 60);
-    const secs = seconds % 60;
+    if (!isFinite(seconds) || isNaN(seconds) || seconds < 0) return '0:00';
+    const s = Math.floor(seconds);
+    const mins = Math.floor(s / 60);
+    const secs = s % 60;
     return `${mins}:${secs.toString().padStart(2, '0')}`;
   };
 

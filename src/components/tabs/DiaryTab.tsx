@@ -72,15 +72,23 @@ export function DiaryTab() {
 
   const handleRecordingComplete = React.useCallback(async (result: ExtendedRecordingResult | null) => {
     if (result) {
-      const hasTranscript = result.transcript && result.transcript.trim().length > 0;
+      const hasTranscript = !!(result.transcript && result.transcript.trim().length > 0);
       const hasProcessedData = !!(result.summary && result.summary.length > 0);
 
       // 1. Upload audio to Supabase Storage
+      // Fall back to the blob URL if upload fails — session still saves, audio won't persist across refreshes
       let storedAudioUrl: string | null = result.audioUrl;
       if (result.audioBlob) {
-        const storagePath = await uploadAudio(result.audioBlob, result.mimeType || 'audio/webm');
-        if (storagePath) {
-          storedAudioUrl = storagePath; // store the path; signed URL is generated at play time
+        try {
+          const storagePath = await uploadAudio(result.audioBlob, result.mimeType || 'audio/webm');
+          if (storagePath) {
+            storedAudioUrl = storagePath; // store the path; signed URL is generated at play time
+          } else {
+            console.warn('[diary] audio upload returned null — keeping blob URL for this session');
+          }
+        } catch (uploadErr) {
+          console.error('[diary] audio upload threw:', uploadErr);
+          // Non-fatal: keep blob URL
         }
       }
 
@@ -114,33 +122,44 @@ export function DiaryTab() {
         leadership: [],
       } : null;
 
+      // Derive a summary that never shows "processing..." permanently
+      const summaryText = result.summary
+        || (hasTranscript
+          ? result.transcript.slice(0, 150) + (result.transcript.length > 150 ? '...' : '')
+          : 'Voice entry saved.');
+
       // 4. Persist to Supabase
-      const saved = await createSession({
-        title: `Voice Entry - ${format(new Date(), 'MMMM d, h:mm a')}`,
-        session_date: format(new Date(), 'yyyy-MM-dd'),
-        audio_url: storedAudioUrl,
-        audio_duration_seconds: result.duration,
-        raw_transcript: hasTranscript ? result.transcript : null,
-        cleaned_transcript: result.cleanedTranscript || (hasTranscript ? result.transcript : null),
-        summary: result.summary || (hasTranscript ? result.transcript.slice(0, 150) + (result.transcript.length > 150 ? '...' : '') : 'New recording - processing...'),
-        mood: result.mood || null,
-        sentiment_score: result.mood ? getMoodSentiment(result.mood) : null,
-        life_areas: lifeAreas,
-        spiritual_topics: result.prayerPoints?.length ? ['prayer'] : [],
-        coach_response: hasProcessedData ? 'AI analysis complete. Review your insights below.' : null,
-        action_status: result.actionItems?.length ? 'extracted' : (hasTranscript ? 'pending' : 'none'),
-        structured_entry: structuredEntry,
-        action_items: result.actionItems?.map(title => ({
-          title,
-          action_type: 'task',
-          priority: 'medium',
-          category: null,
-        })),
-        prayer_points: result.prayerPoints?.map(content => ({
-          content,
-          category: null,
-        })),
-      });
+      let saved: Awaited<ReturnType<typeof createSession>> = null;
+      try {
+        saved = await createSession({
+          title: `Voice Entry - ${format(new Date(), 'MMMM d, h:mm a')}`,
+          session_date: format(new Date(), 'yyyy-MM-dd'),
+          audio_url: storedAudioUrl,
+          audio_duration_seconds: result.duration,
+          raw_transcript: hasTranscript ? result.transcript : null,
+          cleaned_transcript: result.cleanedTranscript || (hasTranscript ? result.transcript : null),
+          summary: summaryText,
+          mood: result.mood || null,
+          sentiment_score: result.mood ? getMoodSentiment(result.mood) : null,
+          life_areas: lifeAreas,
+          spiritual_topics: result.prayerPoints?.length ? ['prayer'] : [],
+          coach_response: hasProcessedData ? 'AI analysis complete. Review your insights below.' : null,
+          action_status: result.actionItems?.length ? 'extracted' : (hasTranscript ? 'pending' : 'none'),
+          structured_entry: structuredEntry,
+          action_items: result.actionItems?.map(title => ({
+            title,
+            action_type: 'task',
+            priority: 'medium',
+            category: null,
+          })),
+          prayer_points: result.prayerPoints?.map(content => ({
+            content,
+            category: null,
+          })),
+        });
+      } catch (saveErr) {
+        console.error('[diary] createSession threw:', saveErr);
+      }
 
       // 5. Optimistic local update (use saved row or build a local placeholder)
       const sessionToShow: CoachSession = saved ?? {
@@ -152,7 +171,7 @@ export function DiaryTab() {
         audio_duration_seconds: result.duration,
         raw_transcript: hasTranscript ? result.transcript : null,
         cleaned_transcript: result.cleanedTranscript || (hasTranscript ? result.transcript : null),
-        summary: result.summary || 'New recording - processing...',
+        summary: summaryText,
         mood: (result.mood as SessionMood) || null,
         sentiment_score: result.mood ? getMoodSentiment(result.mood) : null,
         life_areas: lifeAreas,

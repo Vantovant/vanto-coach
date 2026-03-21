@@ -31,7 +31,7 @@ import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
 import { useAudioRecorder, type RecordingResult } from '@/hooks/useAudioRecorder';
 import { useSpeechRecognition, type SpeechRecognitionStatus } from '@/hooks/useSpeechRecognition';
-import { useTranscriptProcessor, type ProcessedTranscript } from '@/hooks/useTranscriptProcessor';
+import { useTranscriptProcessor, type ProcessedTranscript, type ProcessingStatus } from '@/hooks/useTranscriptProcessor';
 import { ScriptureList } from '@/components/bible/ScriptureCard';
 
 // Extended result type that includes transcript and AI processing
@@ -95,6 +95,10 @@ export function VoiceRecorder({ onComplete, onCancel }: VoiceRecorderProps) {
     reset: resetProcessor,
   } = useTranscriptProcessor();
 
+  // Keep a ref to processingStatus so the handleSave polling closure always reads the live value
+  const processingStatusRef = React.useRef<ProcessingStatus>(processingStatus);
+  React.useEffect(() => { processingStatusRef.current = processingStatus; }, [processingStatus]);
+
   const audioRef = React.useRef<HTMLAudioElement>(null);
   const [isPlaying, setIsPlaying] = React.useState(false);
   const [playbackProgress, setPlaybackProgress] = React.useState(0);
@@ -125,7 +129,7 @@ export function VoiceRecorder({ onComplete, onCancel }: VoiceRecorderProps) {
     if (!audio) return;
 
     const handleTimeUpdate = () => {
-      if (audio.duration) {
+      if (audio.duration && isFinite(audio.duration) && !isNaN(audio.duration)) {
         setPlaybackProgress((audio.currentTime / audio.duration) * 100);
       }
     };
@@ -199,13 +203,22 @@ export function VoiceRecorder({ onComplete, onCancel }: VoiceRecorderProps) {
 
     setIsSaving(true);
 
-    // Wait for processing to complete if still in progress
+    // Wait for AI processing to finish — poll every 250 ms, timeout after 30 s
     if (processingStatus === 'processing') {
-      await new Promise(resolve => setTimeout(resolve, 2000));
+      await new Promise<void>((resolve) => {
+        const start = Date.now();
+        const check = setInterval(() => {
+          // Read the ref instead of the stale closure value
+          if (processingStatusRef.current !== 'processing' || Date.now() - start > 30_000) {
+            clearInterval(check);
+            resolve();
+          }
+        }, 250);
+      });
     }
 
     // Brief delay for UX
-    await new Promise(resolve => setTimeout(resolve, 500));
+    await new Promise(resolve => setTimeout(resolve, 300));
 
     setIsSaving(false);
     onComplete({

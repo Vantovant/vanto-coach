@@ -72,12 +72,22 @@ export function SessionDetail({ session, onClose, onDelete }: SessionDetailProps
   React.useEffect(() => {
     const raw = session.audio_url;
     if (!raw) { setResolvedAudioUrl(null); return; }
+
+    const applyUrl = (url: string | null) => {
+      setResolvedAudioUrl(url);
+      // Force the audio element to reload when the src changes asynchronously.
+      // Without this, browsers that cached src=undefined won't start loading the new URL.
+      if (url && audioRef.current) {
+        audioRef.current.load();
+      }
+    };
+
     // If it's already a full URL (blob:, http:, https:), use it directly
     if (raw.startsWith('blob:') || raw.startsWith('http')) {
-      setResolvedAudioUrl(raw);
+      applyUrl(raw);
     } else {
       // It's a Supabase Storage path — get a signed URL
-      getSignedAudioUrl(raw).then(url => setResolvedAudioUrl(url));
+      getSignedAudioUrl(raw).then(url => applyUrl(url));
     }
   }, [session.audio_url]);
 

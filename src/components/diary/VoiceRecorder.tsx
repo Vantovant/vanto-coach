@@ -33,6 +33,7 @@ import { useAudioRecorder, type RecordingResult } from '@/hooks/useAudioRecorder
 import { useSpeechRecognition, type SpeechRecognitionStatus } from '@/hooks/useSpeechRecognition';
 import { useTranscriptProcessor, type ProcessedTranscript, type ProcessingStatus } from '@/hooks/useTranscriptProcessor';
 import { ScriptureList } from '@/components/bible/ScriptureCard';
+import fixWebmDuration from 'fix-webm-duration';
 
 // Extended result type that includes transcript and AI processing
 export interface ExtendedRecordingResult extends RecordingResult {
@@ -217,15 +218,31 @@ export function VoiceRecorder({ onComplete, onCancel }: VoiceRecorderProps) {
       });
     }
 
+    // Fix WebM duration header — MediaRecorder blobs have no Duration element,
+    // causing browsers to report Infinity. fixWebmDuration writes the real elapsed
+    // duration (in ms) into the container so the audio element can scrub correctly.
+    let finalBlob: Blob = audioBlob;
+    let finalUrl: string = audioUrl;
+    if (audioBlob.type.includes('webm') && duration > 0) {
+      try {
+        const fixed: Blob = await fixWebmDuration(audioBlob, duration * 1000, { logger: false });
+        const fixedUrl = URL.createObjectURL(fixed);
+        finalBlob = fixed;
+        finalUrl = fixedUrl;
+      } catch {
+        // Non-fatal — use original blob if fix fails
+      }
+    }
+
     // Brief delay for UX
     await new Promise(resolve => setTimeout(resolve, 300));
 
     setIsSaving(false);
     onComplete({
-      audioBlob,
-      audioUrl,
+      audioBlob: finalBlob,
+      audioUrl: finalUrl,
       duration,
-      mimeType: audioBlob.type,
+      mimeType: finalBlob.type,
       transcript: editedTranscript || transcript,
       cleanedTranscript: processedResult?.cleanedTranscript,
       summary: processedResult?.summary,

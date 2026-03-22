@@ -2,6 +2,7 @@
 
 import { useEffect } from "react";
 import { AuthProvider } from "@/context/AuthContext";
+import { Toaster } from "@/components/ui/sonner";
 
 export function ClientBody({
   children,
@@ -17,6 +18,7 @@ export function ClientBody({
   return (
     <AuthProvider>
       <div className="antialiased">{children}</div>
+      <Toaster position="bottom-right" richColors closeButton />
     </AuthProvider>
   );
 }

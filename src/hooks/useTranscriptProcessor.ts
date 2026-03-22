@@ -1,13 +1,15 @@
 'use client';
 
 import { useState, useCallback } from 'react';
-import { AI_CONFIG, type AIProcessingResponse, type ProcessedTranscriptData } from '@/lib/ai/config';
+import { AI_CONFIG, type AIProcessingResponse } from '@/lib/ai/config';
+import { captureError, captureMessage } from '@/lib/monitoring';
 
 export type ProcessingStatus =
   | 'idle'
   | 'processing'
   | 'completed'
-  | 'error';
+  | 'error'
+  | 'timedOut';
 
 export interface ProcessedTranscript {
   rawTranscript: string;
@@ -36,11 +38,18 @@ export interface UseTranscriptProcessorReturn {
   reset: () => void;
 }
 
+/** Client-side hard-stop timeout for AI processing (ms). */
+const PROCESSING_TIMEOUT_MS = 45_000;
+
 /**
- * Hook for AI-powered transcript processing
+ * Hook for AI-powered transcript processing.
  *
  * Uses OpenAI API when available, falls back to local processing
  * if API key is not configured or API call fails.
+ *
+ * Enforces a PROCESSING_TIMEOUT_MS client-side timeout so a stuck
+ * network call can never leave the UI in a permanent "processing" state.
+ * When the timeout fires the status transitions to 'timedOut'.
  */
 export function useTranscriptProcessor(): UseTranscriptProcessorReturn {
   const [status, setStatus] = useState<ProcessingStatus>('idle');
@@ -62,49 +71,82 @@ export function useTranscriptProcessor(): UseTranscriptProcessorReturn {
       setError(null);
       setIsUsingFallback(false);
 
-      // Simulate initial progress
       setProgress(20);
 
-      // Call the API route
-      const response = await fetch(AI_CONFIG.apiEndpoint, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          transcript: rawTranscript,
-          options: {
-            generateSummary: true,
-            extractActions: true,
-            extractPrayers: true,
-            detectMood: true,
-            cleanTranscript: true,
-          },
-        }),
-      });
+      // ── Hard client-side timeout ─────────────────────────────────
+      // If the fetch does not resolve within PROCESSING_TIMEOUT_MS,
+      // the AbortController cancels the request and we transition to
+      // 'timedOut' so the UI can surface a clear failed state.
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => {
+        controller.abort();
+        captureMessage('Transcript processing timed out on client', 'warning', {
+          context: 'diary:process',
+          timeoutMs: PROCESSING_TIMEOUT_MS,
+        });
+      }, PROCESSING_TIMEOUT_MS);
 
+      let response: Response;
+      try {
+        response = await fetch(AI_CONFIG.apiEndpoint, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          signal: controller.signal,
+          body: JSON.stringify({
+            transcript: rawTranscript,
+            options: {
+              generateSummary: true,
+              extractActions: true,
+              extractPrayers: true,
+              detectMood: true,
+              cleanTranscript: true,
+            },
+          }),
+        });
+      } catch (fetchErr) {
+        clearTimeout(timeoutId);
+        // AbortError means our own timeout fired
+        if (fetchErr instanceof Error && fetchErr.name === 'AbortError') {
+          setError('Processing timed out. You can retry or save as-is.');
+          setStatus('timedOut');
+          setProgress(0);
+          captureMessage('Fetch aborted by client timeout', 'warning', {
+            context: 'diary:process',
+          });
+          return null;
+        }
+        throw fetchErr; // re-throw non-abort network errors
+      }
+
+      clearTimeout(timeoutId);
       setProgress(60);
 
       if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        captureMessage(`AI API returned ${response.status}`, 'error', {
+          context: 'diary:process',
+          statusCode: response.status,
+          errorData,
+        });
         throw new Error(`API request failed: ${response.status}`);
       }
 
       const apiResponse: AIProcessingResponse = await response.json();
-
       setProgress(80);
 
       if (!apiResponse.success || !apiResponse.data) {
         throw new Error(apiResponse.error || 'Processing failed');
       }
 
-      // Track if fallback was used
       if (apiResponse.fallbackUsed) {
         setIsUsingFallback(true);
+        captureMessage('AI processing used local fallback', 'info', {
+          context: 'diary:process',
+        });
       }
 
       setProgress(90);
 
-      // Transform API response to ProcessedTranscript
       const processed: ProcessedTranscript = {
         rawTranscript: apiResponse.data.rawTranscript,
         cleanedTranscript: apiResponse.data.cleanedTranscript,
@@ -129,9 +171,10 @@ export function useTranscriptProcessor(): UseTranscriptProcessorReturn {
 
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Processing failed';
-      console.error('Transcript processing error:', err);
+      captureError(err, { context: 'diary:process' });
       setError(message);
       setStatus('error');
+      setProgress(0);
       return null;
     }
   }, []);

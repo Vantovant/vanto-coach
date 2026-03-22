@@ -608,6 +608,25 @@ export async function getMemories(): Promise<CoachMemory[]> {
   return data ?? [];
 }
 
+/**
+ * Toggle a memory's is_pinned or is_archived flag.
+ * Returns the updated memory row, or null on failure.
+ */
+export async function updateMemoryFlags(
+  id: string,
+  patch: { is_pinned?: boolean; is_archived?: boolean },
+): Promise<CoachMemory | null> {
+  const supabase = createClient();
+  const { data, error } = await supabase
+    .from('coach_memories')
+    .update({ ...patch, updated_at: new Date().toISOString() })
+    .eq('id', id)
+    .select()
+    .single();
+  if (error) { console.error('[db] updateMemoryFlags error:', error.message); return null; }
+  return data as CoachMemory;
+}
+
 // ─────────────────────────────────────────────
 // ACTION ITEMS
 // ─────────────────────────────────────────────

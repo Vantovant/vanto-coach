@@ -431,8 +431,8 @@ export function SettingsTab() {
                   <p className="text-sm text-muted-foreground">Tasks, reminders, and meetings sync</p>
                 </div>
               </div>
-              <Badge variant="secondary" className="bg-success/20 text-success">
-                Connected
+              <Badge variant="secondary" className="bg-muted text-muted-foreground">
+                Coming Soon
               </Badge>
             </div>
           </CardContent>

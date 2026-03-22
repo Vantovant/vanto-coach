@@ -113,6 +113,16 @@ export function ActionPlansTab() {
     setSelectedItems(new Set());
   };
 
+  const handleStatusChange = async (id: string, status: 'pending' | 'approved' | 'rejected' | 'synced') => {
+    const ok = await updateActionItemStatus(id, status);
+    if (ok) {
+      setActionItems(prev => prev.map(item =>
+        item.id === id ? { ...item, status } : item
+      ));
+      setSelectedItems(prev => { const s = new Set(prev); s.delete(id); return s; });
+    }
+  };
+
   const handleSyncToVantoOS = () => {
     setShowSyncDialog(true);
   };
@@ -263,7 +273,14 @@ export function ActionPlansTab() {
             </div>
             {selectedItems.size > 0 && (
               <div className="flex items-center gap-2">
-                <Button variant="outline" size="sm" className="gap-2">
+                <Button variant="outline" size="sm" className="gap-2" onClick={async () => {
+                  const ids = Array.from(selectedItems);
+                  await Promise.all(ids.map(id => updateActionItemStatus(id, 'rejected')));
+                  setActionItems(prev => prev.map(item =>
+                    ids.includes(item.id) ? { ...item, status: 'rejected' as const } : item
+                  ));
+                  setSelectedItems(new Set());
+                }}>
                   <X className="h-4 w-4" />
                   Reject
                 </Button>
@@ -312,6 +329,7 @@ export function ActionPlansTab() {
                       item={item}
                       isSelected={selectedItems.has(item.id)}
                       onToggleSelect={() => toggleSelect(item.id)}
+                      onStatusChange={handleStatusChange}
                     />
                   ))}
                 </div>
@@ -394,10 +412,12 @@ function ActionItemRow({
   item,
   isSelected,
   onToggleSelect,
+  onStatusChange,
 }: {
   item: CoachActionItem;
   isSelected: boolean;
   onToggleSelect: () => void;
+  onStatusChange: (id: string, status: 'pending' | 'approved' | 'rejected' | 'synced') => void;
 }) {
   return (
     <div className={cn(
@@ -469,22 +489,31 @@ function ActionItemRow({
         <DropdownMenuContent align="end">
           {item.status === 'pending' && (
             <>
-              <DropdownMenuItem>
+              <DropdownMenuItem onClick={() => onStatusChange(item.id, 'approved')}>
                 <Check className="h-4 w-4 mr-2" />
                 Approve
               </DropdownMenuItem>
-              <DropdownMenuItem>
+              <DropdownMenuItem onClick={() => onStatusChange(item.id, 'rejected')}>
                 <X className="h-4 w-4 mr-2" />
                 Reject
               </DropdownMenuItem>
               <DropdownMenuSeparator />
             </>
           )}
-          <DropdownMenuItem>
-            Edit
-          </DropdownMenuItem>
-          <DropdownMenuItem className="text-destructive">
-            Delete
+          {item.status === 'approved' && (
+            <>
+              <DropdownMenuItem onClick={() => onStatusChange(item.id, 'pending')}>
+                <Clock className="h-4 w-4 mr-2" />
+                Move to Pending
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+            </>
+          )}
+          <DropdownMenuItem
+            className="text-destructive"
+            onClick={() => onStatusChange(item.id, 'rejected')}
+          >
+            Reject
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>

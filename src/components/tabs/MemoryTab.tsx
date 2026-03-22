@@ -44,7 +44,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import type { CoachMemory, CoachInsight, MemoryType, GrowthIndicator } from '@/types/coach';
 import { cn } from '@/lib/utils';
-import { getMemories } from '@/lib/supabase/db';
+import { getMemories, updateMemoryFlags } from '@/lib/supabase/db';
 import { useAuth } from '@/context/AuthContext';
 
 export function MemoryTab() {
@@ -61,6 +61,16 @@ export function MemoryTab() {
     setLoading(true);
     getMemories().then(data => { setMemories(data); setLoading(false); });
   }, [user]);
+
+  const handlePin = async (id: string, currentPinned: boolean) => {
+    const updated = await updateMemoryFlags(id, { is_pinned: !currentPinned });
+    if (updated) setMemories(prev => prev.map(m => m.id === id ? { ...m, is_pinned: !currentPinned } : m));
+  };
+
+  const handleArchive = async (id: string) => {
+    const updated = await updateMemoryFlags(id, { is_archived: true });
+    if (updated) setMemories(prev => prev.filter(m => m.id !== id));
+  };
 
   const filteredMemories = React.useMemo(() => {
     return memories.filter(memory => {
@@ -206,6 +216,8 @@ export function MemoryTab() {
                   key={memory.id}
                   memory={memory}
                   onClick={() => setSelectedMemory(memory)}
+                  onPin={handlePin}
+                  onArchive={handleArchive}
                 />
               ))}
             </div>
@@ -229,6 +241,8 @@ export function MemoryTab() {
                   key={memory.id}
                   memory={memory}
                   onClick={() => setSelectedMemory(memory)}
+                  onPin={handlePin}
+                  onArchive={handleArchive}
                 />
               ))}
             </div>
@@ -262,10 +276,14 @@ export function MemoryTab() {
 
 function MemoryCard({
   memory,
-  onClick
+  onClick,
+  onPin,
+  onArchive,
 }: {
   memory: CoachMemory;
   onClick: () => void;
+  onPin: (id: string, currentPinned: boolean) => void;
+  onArchive: (id: string) => void;
 }) {
   return (
     <Card
@@ -291,11 +309,11 @@ function MemoryCard({
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end">
-                <DropdownMenuItem>
+                <DropdownMenuItem onClick={(e) => { e.stopPropagation(); onPin(memory.id, memory.is_pinned); }}>
                   <Pin className="h-4 w-4 mr-2" />
                   {memory.is_pinned ? 'Unpin' : 'Pin'}
                 </DropdownMenuItem>
-                <DropdownMenuItem>
+                <DropdownMenuItem onClick={(e) => { e.stopPropagation(); onArchive(memory.id); }}>
                   <Archive className="h-4 w-4 mr-2" />
                   Archive
                 </DropdownMenuItem>

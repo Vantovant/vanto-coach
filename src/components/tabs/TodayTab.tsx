@@ -34,7 +34,7 @@ import { useBibleVerse } from '@/hooks/useBibleVerse';
 import { buildScriptureUrlFromReference, buildStudyUrl } from '@/lib/bible/navigation';
 import { cn } from '@/lib/utils';
 import { useRouter } from 'next/navigation';
-import { getActionItems, getPrayerPoints, getSessions, type PrayerPointRow } from '@/lib/supabase/db';
+import { getActionItems, getPrayerPoints, getRecentSessions, type PrayerPointRow } from '@/lib/supabase/db';
 import type { CoachActionItem, CoachSession } from '@/types/coach';
 import { useAuth } from '@/context/AuthContext';
 
@@ -233,8 +233,8 @@ export function TodayTab() {
     if (!user) return;
     getActionItems().then(setActionItems);
     getPrayerPoints('active').then(setPrayerPoints);
-    // Load up to 5 recent sessions for multi-session intelligence
-    getSessions().then(sessions => setRecentSessions(sessions.slice(0, 5)));
+    // Load only the 5 most recent sessions — no need to fetch full history
+    getRecentSessions(5).then(setRecentSessions);
   }, [user]);
 
   // Derive all briefing content from real persisted data (multi-session)

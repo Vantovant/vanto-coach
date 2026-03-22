@@ -17,25 +17,103 @@ import type {
 // SESSIONS
 // ─────────────────────────────────────────────
 
+/** Default page size for diary session loading */
+export const SESSION_PAGE_SIZE = 20;
+
+const SESSION_SELECT = `
+  *,
+  coach_structured_entries(*),
+  coach_action_items(*),
+  coach_scripture_refs(*),
+  coach_prayer_points(*)
+` as const;
+
+/**
+ * Fetch the first page of sessions (newest first).
+ * Returns at most SESSION_PAGE_SIZE rows as a plain array.
+ * @deprecated Prefer getRecentSessions(n) or getSessionsPage() for new callers.
+ */
 export async function getSessions(): Promise<CoachSession[]> {
+  const { sessions } = await getSessionsPage(SESSION_PAGE_SIZE);
+  return sessions;
+}
+
+export interface SessionsPageResult {
+  sessions: CoachSession[];
+  nextCursor: string | null;
+}
+
+/**
+ * Load a page of sessions using keyset (cursor-based) pagination.
+ *
+ * @param limit  Number of rows per page (default SESSION_PAGE_SIZE)
+ * @param cursor ISO timestamp of the last session seen — pass the `created_at`
+ *               of the last item to get the next page. Omit / null for the first page.
+ * @param mood   Optional mood filter applied at the database level.
+ * @param search Optional full-text search applied to title + raw_transcript.
+ *
+ * Returns { sessions, nextCursor } — nextCursor is null when no more pages exist.
+ */
+export async function getSessionsPage(
+  limit: number = SESSION_PAGE_SIZE,
+  cursor: string | null = null,
+  mood: string | null = null,
+  search: string | null = null,
+): Promise<SessionsPageResult> {
+  const supabase = createClient();
+
+  // Fetch limit+1 so we know whether another page exists without a COUNT query
+  let query = supabase
+    .from('coach_sessions')
+    .select(SESSION_SELECT)
+    .is('deleted_at', null)
+    .order('created_at', { ascending: false })
+    .limit(limit + 1);
+
+  if (cursor) {
+    query = query.lt('created_at', cursor);
+  }
+  if (mood) {
+    query = query.eq('mood', mood);
+  }
+  if (search) {
+    query = query.or(
+      `title.ilike.%${search}%,raw_transcript.ilike.%${search}%`
+    );
+  }
+
+  const { data, error } = await query;
+
+  if (error) {
+    console.error('[db] getSessionsPage error:', error.message);
+    return { sessions: [], nextCursor: null };
+  }
+
+  const rows = data ?? [];
+  const hasMore = rows.length > limit;
+  const pageRows = hasMore ? rows.slice(0, limit) : rows;
+  const sessions = pageRows.map(rowToSession);
+  const nextCursor = hasMore ? (pageRows[pageRows.length - 1].created_at as string) : null;
+  return { sessions, nextCursor };
+}
+
+/**
+ * Fetch only the N most-recent sessions.
+ * Used by TodayTab, InsightsTab — avoids loading the full history.
+ */
+export async function getRecentSessions(limit: number): Promise<CoachSession[]> {
   const supabase = createClient();
   const { data, error } = await supabase
     .from('coach_sessions')
-    .select(`
-      *,
-      coach_structured_entries(*),
-      coach_action_items(*),
-      coach_scripture_refs(*),
-      coach_prayer_points(*)
-    `)
+    .select(SESSION_SELECT)
     .is('deleted_at', null)
-    .order('session_date', { ascending: false });
+    .order('created_at', { ascending: false })
+    .limit(limit);
 
   if (error) {
-    console.error('[db] getSessions error:', error.message);
+    console.error('[db] getRecentSessions error:', error.message);
     return [];
   }
-
   return (data ?? []).map(rowToSession);
 }
 
@@ -298,18 +376,31 @@ export async function updateSessionAIResults(
     if (actionsError) console.error('[db] updateSessionAIResults action_items error:', actionsError.message);
   }
 
-  // 3. Insert prayer points (simple insert — no dedupe key on prayer_points table)
-  if (input.prayer_points?.length) {
-    // Avoid duplicating prayer points if retry is hit twice: delete existing for this session first
-    await supabase.from('coach_prayer_points').delete().eq('session_id', sessionId);
-    const rows = input.prayer_points.map(p => ({
-      session_id: sessionId,
-      user_id: user.id,
-      content: p.content,
-      category: p.category,
-    }));
-    const { error: prayerError } = await supabase.from('coach_prayer_points').insert(rows);
-    if (prayerError) console.error('[db] updateSessionAIResults prayer_points error:', prayerError.message);
+  // 3. Replace prayer points atomically.
+  // Strategy: delete all existing rows for this session, then insert the new set.
+  // Both ops run sequentially in the same RLS context.  If the insert fails the
+  // old rows are already gone — acceptable for a retry scenario where the caller
+  // can retry again.  A Postgres RPC transaction would be the ideal long-term fix
+  // but requires a migration; this is sufficient for current scale.
+  if (input.prayer_points !== undefined) {
+    await supabase
+      .from('coach_prayer_points')
+      .delete()
+      .eq('session_id', sessionId)
+      .eq('user_id', user.id); // RLS belt-and-suspenders
+
+    if (input.prayer_points.length > 0) {
+      const rows = input.prayer_points.map(p => ({
+        session_id: sessionId,
+        user_id: user.id,
+        content: p.content,
+        category: p.category,
+      }));
+      const { error: prayerError } = await supabase
+        .from('coach_prayer_points')
+        .insert(rows);
+      if (prayerError) console.error('[db] updateSessionAIResults prayer_points error:', prayerError.message);
+    }
   }
 
   // 4. Return the fully refreshed session (picks up all related rows)

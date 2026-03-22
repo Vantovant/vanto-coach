@@ -68,10 +68,36 @@ export function DiaryTab() {
   const [filterMood, setFilterMood] = React.useState<SessionMood | 'all'>('all');
   const [showRecorder, setShowRecorder] = React.useState(false);
 
-  const { sessions, loading: sessionsLoading, error: sessionsError, prependSession, removeSession, updateSession } = useSessions();
+  const {
+    sessions,
+    loading: sessionsLoading,
+    loadingMore,
+    hasMore,
+    error: sessionsError,
+    prependSession,
+    removeSession,
+    updateSession,
+    applyFilter,
+    loadMore,
+  } = useSessions();
 
   // Tracks which session IDs currently have a retry in-flight to prevent double-submit
   const retryingIds = React.useRef<Set<string>>(new Set());
+
+  // Debounce search → DB-driven filter (300ms)
+  const searchDebounceRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  const handleSearchChange = React.useCallback((value: string) => {
+    setSearchQuery(value);
+    if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
+    searchDebounceRef.current = setTimeout(() => {
+      applyFilter(filterMood === 'all' ? null : filterMood, value || null);
+    }, 300);
+  }, [applyFilter, filterMood]);
+
+  const handleMoodFilter = React.useCallback((mood: SessionMood | 'all') => {
+    setFilterMood(mood);
+    applyFilter(mood === 'all' ? null : mood, searchQuery || null);
+  }, [applyFilter, searchQuery]);
 
   const allSessions = sessions;
 
@@ -382,19 +408,11 @@ export function DiaryTab() {
     }
   }, [removeSession, selectedSession]);
 
-  const filteredSessions = React.useMemo(() => {
-    return allSessions.filter(session => {
-      const matchesSearch = searchQuery === '' ||
-        session.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        session.raw_transcript?.toLowerCase().includes(searchQuery.toLowerCase());
-      const matchesMood = filterMood === 'all' || session.mood === filterMood;
-      return matchesSearch && matchesMood;
-    });
-  }, [searchQuery, filterMood, allSessions]);
-
+  // Sessions are already filtered at the DB level via applyFilter.
+  // Group them by date for display.
   const groupedSessions = React.useMemo(() => {
     const groups: { [key: string]: CoachSession[] } = {};
-    filteredSessions.forEach(session => {
+    allSessions.forEach(session => {
       const date = parseISO(session.session_date);
       let key: string;
       if (isToday(date)) key = 'Today';
@@ -405,7 +423,7 @@ export function DiaryTab() {
       groups[key].push(session);
     });
     return groups;
-  }, [filteredSessions]);
+  }, [allSessions]);
 
   return (
     <div className="pb-24 md:pb-8">
@@ -444,7 +462,7 @@ export function DiaryTab() {
                 <Input
                   placeholder="Search entries..."
                   value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
+                  onChange={(e) => handleSearchChange(e.target.value)}
                   className="pl-9"
                 />
               </div>
@@ -455,14 +473,14 @@ export function DiaryTab() {
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end" className="w-48">
-                  <DropdownMenuItem onClick={() => setFilterMood('all')}>
+                  <DropdownMenuItem onClick={() => handleMoodFilter('all')}>
                     All Moods
                   </DropdownMenuItem>
                   <DropdownMenuSeparator />
                   {['grateful', 'hopeful', 'peaceful', 'anxious', 'stressed', 'overwhelmed'].map(mood => (
                     <DropdownMenuItem
                       key={mood}
-                      onClick={() => setFilterMood(mood as SessionMood)}
+                      onClick={() => handleMoodFilter(mood as SessionMood)}
                       className="capitalize"
                     >
                       {getMoodEmoji(mood as SessionMood)} {mood}
@@ -507,7 +525,7 @@ export function DiaryTab() {
                   </div>
                 ))}
 
-                {filteredSessions.length === 0 && (
+                {allSessions.length === 0 && !sessionsLoading && (
                   <div className="text-center py-12">
                     <FileText className="h-12 w-12 mx-auto text-muted-foreground/50 mb-4" />
                     <p className="text-muted-foreground">No entries found</p>
@@ -517,6 +535,31 @@ export function DiaryTab() {
                       className="mt-2"
                     >
                       Record your first entry
+                    </Button>
+                  </div>
+                )}
+
+                {/* Load More */}
+                {hasMore && !sessionsLoading && (
+                  <div className="pt-2 pb-4">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="w-full gap-2"
+                      disabled={loadingMore}
+                      onClick={loadMore}
+                    >
+                      {loadingMore ? (
+                        <>
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                          Loading…
+                        </>
+                      ) : (
+                        <>
+                          <RefreshCw className="h-3.5 w-3.5" />
+                          Load older entries
+                        </>
+                      )}
                     </Button>
                   </div>
                 )}

@@ -42,7 +42,7 @@ import {
 } from '@/components/ui/select';
 import type { CoachInsight, GrowthArea, LifeBalanceScore } from '@/types/coach';
 import { cn } from '@/lib/utils';
-import { getSessions } from '@/lib/supabase/db';
+import { getRecentSessions } from '@/lib/supabase/db';
 import { useAuth } from '@/context/AuthContext';
 
 export function InsightsTab() {
@@ -55,7 +55,8 @@ export function InsightsTab() {
   React.useEffect(() => {
     if (!user) return;
     setLoading(true);
-    getSessions().then(sessions => {
+    // 90 days max covers the longest insight period (quarter) without full history load
+    getRecentSessions(90).then(sessions => {
       if (!sessions.length) { setLoading(false); return; }
 
       const today = new Date();

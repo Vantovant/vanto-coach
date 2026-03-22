@@ -12,6 +12,8 @@ export interface UseSessionsReturn {
   refresh: () => Promise<void>;
   prependSession: (session: CoachSession) => void;
   removeSession: (id: string) => void;
+  /** Replace a single session in-memory (e.g. after retry persistence succeeds) */
+  updateSession: (updated: CoachSession) => void;
 }
 
 export function useSessions(): UseSessionsReturn {
@@ -56,5 +58,9 @@ export function useSessions(): UseSessionsReturn {
     setSessions(prev => prev.filter(s => s.id !== id));
   }, []);
 
-  return { sessions, loading, error, refresh: load, prependSession, removeSession };
+  const updateSession = React.useCallback((updated: CoachSession) => {
+    setSessions(prev => prev.map(s => s.id === updated.id ? updated : s));
+  }, []);
+
+  return { sessions, loading, error, refresh: load, prependSession, removeSession, updateSession };
 }

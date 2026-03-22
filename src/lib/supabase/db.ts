@@ -200,6 +200,122 @@ export async function createSession(input: CreateSessionInput): Promise<CoachSes
   return getSessionById(sessionId);
 }
 
+// ─────────────────────────────────────────────
+// Retry / AI result persistence
+// ─────────────────────────────────────────────
+
+export interface UpdateSessionAIInput {
+  /** Cleaned transcript from AI (may be same as raw if no cleaning applied) */
+  cleaned_transcript?: string | null;
+  /** One-paragraph session summary */
+  summary?: string | null;
+  /** Detected mood */
+  mood?: string | null;
+  /** Sentiment score 0-1 */
+  sentiment_score?: number | null;
+  /** Life areas derived from key topics */
+  life_areas?: string[];
+  /** Spiritual topics detected */
+  spiritual_topics?: string[];
+  /** Coach response / analysis confirmation string */
+  coach_response?: string | null;
+  /** Mark action items as extracted */
+  action_status?: 'pending' | 'extracted' | 'applied' | 'none';
+  /** New action item rows to insert for this session */
+  action_items?: Array<{
+    title: string;
+    action_type: string;
+    priority: string;
+    category: string | null;
+  }>;
+  /** New prayer point rows to insert for this session */
+  prayer_points?: Array<{
+    content: string;
+    category: string | null;
+  }>;
+}
+
+/**
+ * Persists AI processing results back into an existing diary session.
+ * Called after a successful retry so the session becomes fully AI-complete.
+ *
+ * - Updates the coach_sessions row with all provided AI fields.
+ * - Inserts new action_item and prayer_point rows (skips if none provided).
+ * - Returns the fully refreshed CoachSession, or null on failure.
+ */
+export async function updateSessionAIResults(
+  sessionId: string,
+  input: UpdateSessionAIInput,
+): Promise<CoachSession | null> {
+  const supabase = createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) {
+    console.error('[db] updateSessionAIResults: no authenticated user');
+    return null;
+  }
+
+  const now = new Date().toISOString();
+
+  // 1. Patch the session row
+  const patch: Record<string, unknown> = { updated_at: now };
+  if (input.cleaned_transcript !== undefined) patch.cleaned_transcript = input.cleaned_transcript;
+  if (input.summary !== undefined) patch.summary = input.summary;
+  if (input.mood !== undefined) patch.mood = input.mood;
+  if (input.sentiment_score !== undefined) patch.sentiment_score = input.sentiment_score;
+  if (input.life_areas !== undefined) patch.life_areas = input.life_areas;
+  if (input.spiritual_topics !== undefined) patch.spiritual_topics = input.spiritual_topics;
+  if (input.coach_response !== undefined) patch.coach_response = input.coach_response;
+  if (input.action_status !== undefined) patch.action_status = input.action_status;
+
+  const { error: patchError } = await supabase
+    .from('coach_sessions')
+    .update(patch)
+    .eq('id', sessionId)
+    .eq('user_id', user.id); // RLS belt-and-suspenders
+
+  if (patchError) {
+    console.error('[db] updateSessionAIResults patch error:', patchError.message);
+    return null;
+  }
+
+  // 2. Insert action items (idempotent: dedupe_key prevents true duplicates)
+  if (input.action_items?.length) {
+    const session_date = new Date().toISOString().split('T')[0];
+    const rows = input.action_items.map(a => ({
+      session_id: sessionId,
+      user_id: user.id,
+      title: a.title,
+      action_type: a.action_type,
+      priority: a.priority,
+      category: a.category,
+      source: 'coach_extract' as const,
+      status: 'pending' as const,
+      dedupe_key: `${user.id}|${a.title.slice(0, 30)}|${session_date}`,
+    }));
+    const { error: actionsError } = await supabase
+      .from('coach_action_items')
+      .upsert(rows, { onConflict: 'dedupe_key', ignoreDuplicates: true });
+    if (actionsError) console.error('[db] updateSessionAIResults action_items error:', actionsError.message);
+  }
+
+  // 3. Insert prayer points (simple insert — no dedupe key on prayer_points table)
+  if (input.prayer_points?.length) {
+    // Avoid duplicating prayer points if retry is hit twice: delete existing for this session first
+    await supabase.from('coach_prayer_points').delete().eq('session_id', sessionId);
+    const rows = input.prayer_points.map(p => ({
+      session_id: sessionId,
+      user_id: user.id,
+      content: p.content,
+      category: p.category,
+    }));
+    const { error: prayerError } = await supabase.from('coach_prayer_points').insert(rows);
+    if (prayerError) console.error('[db] updateSessionAIResults prayer_points error:', prayerError.message);
+  }
+
+  // 4. Return the fully refreshed session (picks up all related rows)
+  return getSessionById(sessionId);
+}
+
 export async function softDeleteSession(id: string): Promise<boolean> {
   const supabase = createClient();
   const { error } = await supabase

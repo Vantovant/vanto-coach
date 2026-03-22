@@ -54,7 +54,7 @@ import {
 } from '@/components/ui/dialog';
 import type { CoachSession, CoachMemory, SessionMood, LifeArea } from '@/types/coach';
 import { useSessions } from '@/hooks/useSessions';
-import { createSession, softDeleteSession, upsertMemory } from '@/lib/supabase/db';
+import { createSession, softDeleteSession, upsertMemory, updateSessionAIResults } from '@/lib/supabase/db';
 import { uploadAudio } from '@/lib/supabase/storage';
 import { cn } from '@/lib/utils';
 import { VoiceRecorder, type ExtendedRecordingResult } from '@/components/diary/VoiceRecorder';
@@ -68,7 +68,10 @@ export function DiaryTab() {
   const [filterMood, setFilterMood] = React.useState<SessionMood | 'all'>('all');
   const [showRecorder, setShowRecorder] = React.useState(false);
 
-  const { sessions, loading: sessionsLoading, error: sessionsError, prependSession, removeSession } = useSessions();
+  const { sessions, loading: sessionsLoading, error: sessionsError, prependSession, removeSession, updateSession } = useSessions();
+
+  // Tracks which session IDs currently have a retry in-flight to prevent double-submit
+  const retryingIds = React.useRef<Set<string>>(new Set());
 
   const allSessions = sessions;
 
@@ -207,6 +210,9 @@ export function DiaryTab() {
   }, [prependSession]);
 
   const handleRetryProcessing = React.useCallback(async (session: CoachSession) => {
+    // ── Idempotency guard ──────────────────────────────────────────────────────
+    if (retryingIds.current.has(session.id)) return;
+
     const transcript = session.cleaned_transcript || session.raw_transcript;
     if (!transcript) {
       toast.error('No transcript to process', {
@@ -215,16 +221,18 @@ export function DiaryTab() {
       return;
     }
 
+    retryingIds.current.add(session.id);
     const retryToastId = toast.loading('Retrying analysis…', {
       description: 'Re-processing your saved transcript.',
     });
 
-    captureMessage('User triggered retry processing', 'info', {
+    captureMessage('Retry started', 'info', {
       context: 'diary:retry',
       sessionId: session.id,
     });
 
     try {
+      // ── Step 1: Call AI API ────────────────────────────────────────────────
       const response = await fetch('/api/ai/process-transcript', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -240,22 +248,108 @@ export function DiaryTab() {
         }),
       });
 
-      if (!response.ok) throw new Error(`API returned ${response.status}`);
+      if (!response.ok) {
+        const msg = `API returned ${response.status}`;
+        captureMessage(msg, 'error', { context: 'diary:retry:api', sessionId: session.id });
+        throw new Error(msg);
+      }
 
       const apiResponse = await response.json();
       if (!apiResponse.success || !apiResponse.data) {
-        throw new Error(apiResponse.error || 'Processing failed');
+        const msg = apiResponse.error || 'Processing failed';
+        captureMessage(msg, 'error', { context: 'diary:retry:api', sessionId: session.id });
+        throw new Error(msg);
       }
 
-      toast.success('Analysis complete', {
-        id: retryToastId,
-        description: 'Insights extracted. Refresh to see the updated entry.',
-      });
-
-      captureMessage('Retry processing succeeded', 'info', {
-        context: 'diary:retry',
+      const d = apiResponse.data;
+      captureMessage('Retry API succeeded', 'info', {
+        context: 'diary:retry:api',
         sessionId: session.id,
         method: apiResponse.fallbackUsed ? 'fallback' : 'openai',
+      });
+
+      // ── Step 2: Map AI response → DB update shape ──────────────────────────
+      const lifeAreas: string[] = (d.keyTopics ?? [])
+        .map((t: string) => t.toLowerCase())
+        .filter((t: string) => [
+          'faith', 'family', 'marriage', 'parenting', 'health', 'fitness',
+          'business', 'career', 'finances', 'relationships', 'ministry',
+          'leadership', 'personal_growth', 'rest', 'calling',
+        ].includes(t))
+        .slice(0, 5);
+
+      const getMoodSentimentLocal = (mood: string): number => {
+        const m: Record<string, number> = {
+          grateful: 0.9, hopeful: 0.8, peaceful: 0.85, joyful: 0.95,
+          reflective: 0.6, anxious: 0.3, stressed: 0.25, confused: 0.4,
+          grieving: 0.2, frustrated: 0.3, discouraged: 0.25, overwhelmed: 0.2,
+          determined: 0.75, convicted: 0.65, neutral: 0.5,
+        };
+        return m[mood] ?? 0.5;
+      };
+
+      // ── Step 3: Persist to Supabase ─────────────────────────────────────────
+      const updatedSession = await updateSessionAIResults(session.id, {
+        cleaned_transcript: d.cleanedTranscript ?? null,
+        summary: d.summary ?? null,
+        mood: d.mood ?? null,
+        sentiment_score: d.mood ? getMoodSentimentLocal(d.mood) : null,
+        life_areas: lifeAreas,
+        spiritual_topics: (d.prayerPoints?.length ?? 0) > 0 ? ['prayer'] : [],
+        coach_response: 'AI analysis complete. Review your insights below.',
+        action_status: (d.actionItems?.length ?? 0) > 0 ? 'extracted' : 'pending',
+        action_items: (d.actionItems ?? []).map((title: string) => ({
+          title,
+          action_type: 'task',
+          priority: 'medium',
+          category: null,
+        })),
+        prayer_points: (d.prayerPoints ?? []).map((content: string) => ({
+          content,
+          category: null,
+        })),
+      });
+
+      if (!updatedSession) {
+        captureMessage('Retry DB write failed', 'error', {
+          context: 'diary:retry:db',
+          sessionId: session.id,
+        });
+        toast.error('Analysis done but save failed', {
+          id: retryToastId,
+          description: 'AI extracted insights but could not save them. Please try again.',
+        });
+        return;
+      }
+
+      captureMessage('Retry DB write succeeded', 'info', {
+        context: 'diary:retry:db',
+        sessionId: session.id,
+      });
+
+      // ── Step 4: Update in-memory state immediately ─────────────────────────
+      updateSession(updatedSession);
+      // If the user was viewing this session in the detail panel, refresh it too
+      setSelectedSession(prev => prev?.id === session.id ? updatedSession : prev);
+
+      // ── Step 5: Write memories from the fresh AI data ──────────────────────
+      void writeMemoriesFromSession(updatedSession.id, {
+        transcript: transcript ?? '',
+        cleanedTranscript: d.cleanedTranscript,
+        summary: d.summary,
+        keyTopics: d.keyTopics,
+        mood: d.mood,
+        actionItems: d.actionItems,
+        prayerPoints: d.prayerPoints,
+        audioBlob: new Blob([]),
+        audioUrl: '',
+        duration: session.audio_duration_seconds ?? 0,
+        mimeType: 'audio/webm',
+      });
+
+      toast.success('Entry fully restored', {
+        id: retryToastId,
+        description: 'AI analysis saved. Your session is now complete.',
       });
     } catch (retryErr) {
       captureError(retryErr, { context: 'diary:retry', sessionId: session.id });
@@ -263,8 +357,10 @@ export function DiaryTab() {
         id: retryToastId,
         description: 'Analysis could not be completed. Please try again later.',
       });
+    } finally {
+      retryingIds.current.delete(session.id);
     }
-  }, []);
+  }, [updateSession]);
 
   const handleDelete = React.useCallback(async (id: string) => {
     // Optimistically remove from list and close detail panel immediately
@@ -404,6 +500,7 @@ export function DiaryTab() {
                           isSelected={selectedSession?.id === session.id}
                           onClick={() => setSelectedSession(session)}
                           onRetryProcessing={handleRetryProcessing}
+                          isRetrying={retryingIds.current.has(session.id)}
                         />
                       ))}
                     </div>
@@ -636,11 +733,13 @@ function SessionCard({
   isSelected,
   onClick,
   onRetryProcessing,
+  isRetrying = false,
 }: {
   session: CoachSession;
   isSelected: boolean;
   onClick: () => void;
   onRetryProcessing?: (session: CoachSession) => void;
+  isRetrying?: boolean;
 }) {
   // Check for AI-processed content
   const hasActionItems = session.structured_entry?.followups && session.structured_entry.followups.length > 0;
@@ -747,13 +846,23 @@ function SessionCard({
               variant="outline"
               size="sm"
               className="h-7 gap-1.5 text-xs w-full"
+              disabled={isRetrying}
               onClick={(e) => {
                 e.stopPropagation();
                 onRetryProcessing(session);
               }}
             >
-              <RefreshCw className="h-3 w-3" />
-              Retry AI processing
+              {isRetrying ? (
+                <>
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                  Processing…
+                </>
+              ) : (
+                <>
+                  <RefreshCw className="h-3 w-3" />
+                  Retry AI processing
+                </>
+              )}
             </Button>
           </div>
         )}

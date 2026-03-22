@@ -59,6 +59,8 @@ import { uploadAudio } from '@/lib/supabase/storage';
 import { cn } from '@/lib/utils';
 import { VoiceRecorder, type ExtendedRecordingResult } from '@/components/diary/VoiceRecorder';
 import { SessionDetail } from '@/components/diary/SessionDetail';
+import { toast } from 'sonner';
+import { captureError, captureMessage } from '@/lib/monitoring';
 
 export function DiaryTab() {
   const [selectedSession, setSelectedSession] = React.useState<CoachSession | null>(null);
@@ -157,8 +159,16 @@ export function DiaryTab() {
             category: null,
           })),
         });
+        if (saved) {
+          toast.success('Entry saved', {
+            description: hasProcessedData ? 'AI insights extracted.' : 'Recording preserved.',
+          });
+        }
       } catch (saveErr) {
-        console.error('[diary] createSession threw:', saveErr);
+        captureError(saveErr, { context: 'diary:save' });
+        toast.error('Failed to save entry', {
+          description: 'Your recording was not persisted. Please try again.',
+        });
       }
 
       // 5. Write memory rows from AI-extracted content (fire-and-forget — non-blocking)
@@ -196,6 +206,66 @@ export function DiaryTab() {
     setShowRecorder(false);
   }, [prependSession]);
 
+  const handleRetryProcessing = React.useCallback(async (session: CoachSession) => {
+    const transcript = session.cleaned_transcript || session.raw_transcript;
+    if (!transcript) {
+      toast.error('No transcript to process', {
+        description: 'This entry has no saved transcript.',
+      });
+      return;
+    }
+
+    const retryToastId = toast.loading('Retrying analysis…', {
+      description: 'Re-processing your saved transcript.',
+    });
+
+    captureMessage('User triggered retry processing', 'info', {
+      context: 'diary:retry',
+      sessionId: session.id,
+    });
+
+    try {
+      const response = await fetch('/api/ai/process-transcript', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          transcript,
+          options: {
+            generateSummary: true,
+            extractActions: true,
+            extractPrayers: true,
+            detectMood: true,
+            cleanTranscript: true,
+          },
+        }),
+      });
+
+      if (!response.ok) throw new Error(`API returned ${response.status}`);
+
+      const apiResponse = await response.json();
+      if (!apiResponse.success || !apiResponse.data) {
+        throw new Error(apiResponse.error || 'Processing failed');
+      }
+
+      toast.success('Analysis complete', {
+        id: retryToastId,
+        description: 'Insights extracted. Refresh to see the updated entry.',
+      });
+
+      captureMessage('Retry processing succeeded', 'info', {
+        context: 'diary:retry',
+        sessionId: session.id,
+        method: apiResponse.fallbackUsed ? 'fallback' : 'openai',
+      });
+    } catch (retryErr) {
+      captureError(retryErr, { context: 'diary:retry', sessionId: session.id });
+      toast.error('Retry failed', {
+        id: retryToastId,
+        description: 'Analysis could not be completed. Please try again later.',
+      });
+    }
+  }, []);
+
   const handleDelete = React.useCallback(async (id: string) => {
     // Optimistically remove from list and close detail panel immediately
     removeSession(id);
@@ -206,10 +276,13 @@ export function DiaryTab() {
 
     const ok = await softDeleteSession(id);
     if (!ok) {
-      console.error('[diary] softDelete failed for', id);
-      // Re-fetch so the session reappears rather than silently disappearing
-      // (useSessions refresh is available via the hook but we don't want to
-      //  pull the full list just for an error — a page refresh restores it)
+      captureMessage('softDeleteSession returned false', 'error', {
+        context: 'diary:delete',
+        sessionId: id,
+      });
+      toast.error('Delete failed', {
+        description: 'The entry could not be removed. Refresh to restore it.',
+      });
     }
   }, [removeSession, selectedSession]);
 
@@ -330,6 +403,7 @@ export function DiaryTab() {
                           session={session}
                           isSelected={selectedSession?.id === session.id}
                           onClick={() => setSelectedSession(session)}
+                          onRetryProcessing={handleRetryProcessing}
                         />
                       ))}
                     </div>
@@ -498,11 +572,13 @@ async function writeMemoriesFromSession(
 function SessionCard({
   session,
   isSelected,
-  onClick
+  onClick,
+  onRetryProcessing,
 }: {
   session: CoachSession;
   isSelected: boolean;
   onClick: () => void;
+  onRetryProcessing?: (session: CoachSession) => void;
 }) {
   // Check for AI-processed content
   const hasActionItems = session.structured_entry?.followups && session.structured_entry.followups.length > 0;
@@ -510,6 +586,10 @@ function SessionCard({
   const isAIProcessed = session.coach_response || hasActionItems || hasPrayerPoints;
   const actionCount = session.structured_entry?.followups?.length || 0;
   const prayerCount = session.structured_entry?.prayer_requests?.length || 0;
+
+  // A session needs retry if it has a transcript but no AI analysis
+  const hasTranscript = !!(session.raw_transcript || session.cleaned_transcript);
+  const needsRetry = hasTranscript && !isAIProcessed;
 
   return (
     <Card
@@ -597,6 +677,24 @@ function SessionCard({
             {format(parseISO(session.created_at), 'h:mm a')}
           </div>
         </div>
+
+        {/* Retry processing — shown when transcript exists but no AI analysis */}
+        {needsRetry && onRetryProcessing && (
+          <div className="mt-3 pt-2 border-t border-dashed">
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-7 gap-1.5 text-xs w-full"
+              onClick={(e) => {
+                e.stopPropagation();
+                onRetryProcessing(session);
+              }}
+            >
+              <RefreshCw className="h-3 w-3" />
+              Retry AI processing
+            </Button>
+          </div>
+        )}
       </CardContent>
     </Card>
   );

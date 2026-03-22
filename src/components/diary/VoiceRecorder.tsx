@@ -34,6 +34,8 @@ import { useSpeechRecognition, type SpeechRecognitionStatus } from '@/hooks/useS
 import { useTranscriptProcessor, type ProcessedTranscript, type ProcessingStatus } from '@/hooks/useTranscriptProcessor';
 import { ScriptureList } from '@/components/bible/ScriptureCard';
 import fixWebmDuration from 'fix-webm-duration';
+import { toast } from 'sonner';
+import { captureError, captureMessage } from '@/lib/monitoring';
 
 // Extended result type that includes transcript and AI processing
 export interface ExtendedRecordingResult extends RecordingResult {
@@ -204,13 +206,13 @@ export function VoiceRecorder({ onComplete, onCancel }: VoiceRecorderProps) {
 
     setIsSaving(true);
 
-    // Wait for AI processing to finish — poll every 250 ms, timeout after 30 s
+    // Wait for AI processing to finish — poll every 250 ms.
+    // The hook now enforces its own 45s abort, so we don't need a separate
+    // timeout here. We just wait until it exits the 'processing' state.
     if (processingStatus === 'processing') {
       await new Promise<void>((resolve) => {
-        const start = Date.now();
         const check = setInterval(() => {
-          // Read the ref instead of the stale closure value
-          if (processingStatusRef.current !== 'processing' || Date.now() - start > 30_000) {
+          if (processingStatusRef.current !== 'processing') {
             clearInterval(check);
             resolve();
           }
@@ -238,19 +240,27 @@ export function VoiceRecorder({ onComplete, onCancel }: VoiceRecorderProps) {
     await new Promise(resolve => setTimeout(resolve, 300));
 
     setIsSaving(false);
-    onComplete({
-      audioBlob: finalBlob,
-      audioUrl: finalUrl,
-      duration,
-      mimeType: finalBlob.type,
-      transcript: editedTranscript || transcript,
-      cleanedTranscript: processedResult?.cleanedTranscript,
-      summary: processedResult?.summary,
-      keyTopics: processedResult?.keyTopics,
-      mood: processedResult?.mood,
-      actionItems: processedResult?.actionItems,
-      prayerPoints: processedResult?.prayerPoints,
-    });
+
+    try {
+      onComplete({
+        audioBlob: finalBlob,
+        audioUrl: finalUrl,
+        duration,
+        mimeType: finalBlob.type,
+        transcript: editedTranscript || transcript,
+        cleanedTranscript: processedResult?.cleanedTranscript,
+        summary: processedResult?.summary,
+        keyTopics: processedResult?.keyTopics,
+        mood: processedResult?.mood,
+        actionItems: processedResult?.actionItems,
+        prayerPoints: processedResult?.prayerPoints,
+      });
+    } catch (err) {
+      captureError(err, { context: 'diary:save' });
+      toast.error('Failed to save entry', {
+        description: 'Your recording is safe. Please try again.',
+      });
+    }
   };
 
   const handleDiscard = () => {
@@ -727,11 +737,57 @@ export function VoiceRecorder({ onComplete, onCancel }: VoiceRecorderProps) {
 
               {/* Processing Error */}
               {processingStatus === 'error' && processingError && (
-                <div className="p-3 rounded-xl bg-destructive/10 border border-destructive/20 mb-4">
-                  <p className="text-sm text-destructive flex items-center gap-2">
-                    <AlertCircle className="h-4 w-4" />
-                    {processingError}
-                  </p>
+                <div className="p-3 rounded-xl bg-destructive/10 border border-destructive/20 mb-4 flex items-start gap-3">
+                  <AlertCircle className="h-4 w-4 text-destructive shrink-0 mt-0.5" />
+                  <div className="flex-1">
+                    <p className="text-sm text-destructive font-medium">Analysis failed</p>
+                    <p className="text-xs text-destructive/80 mt-0.5">{processingError}</p>
+                  </div>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="shrink-0 text-xs gap-1"
+                    onClick={() => {
+                      const t = editedTranscript || transcript;
+                      if (t) {
+                        captureMessage('User retried transcript processing after error', 'info', { context: 'diary:process' });
+                        toast.info('Retrying analysis…');
+                        processTranscript(t);
+                      }
+                    }}
+                  >
+                    <RefreshCw className="h-3 w-3" />
+                    Retry
+                  </Button>
+                </div>
+              )}
+
+              {/* Processing Timed Out */}
+              {processingStatus === 'timedOut' && (
+                <div className="p-3 rounded-xl bg-warning/10 border border-warning/30 mb-4 flex items-start gap-3">
+                  <AlertCircle className="h-4 w-4 text-warning shrink-0 mt-0.5" />
+                  <div className="flex-1">
+                    <p className="text-sm text-warning font-medium">Analysis timed out</p>
+                    <p className="text-xs text-warning/80 mt-0.5">
+                      The AI took too long. You can retry or save without analysis — your recording is safe.
+                    </p>
+                  </div>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="shrink-0 text-xs gap-1"
+                    onClick={() => {
+                      const t = editedTranscript || transcript;
+                      if (t) {
+                        captureMessage('User retried transcript processing after timeout', 'info', { context: 'diary:process' });
+                        toast.info('Retrying analysis…');
+                        processTranscript(t);
+                      }
+                    }}
+                  >
+                    <RefreshCw className="h-3 w-3" />
+                    Retry
+                  </Button>
                 </div>
               )}
 

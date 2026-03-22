@@ -403,7 +403,70 @@ export async function updateSessionAIResults(
     }
   }
 
-  // 4. Return the fully refreshed session (picks up all related rows)
+  // 4. Upsert coach_structured_entries so SessionCard counts are immediately correct.
+  //
+  // SessionCard derives action/prayer counts from:
+  //   session.structured_entry.followups.length
+  //   session.structured_entry.prayer_requests.length
+  //
+  // These come from the coach_structured_entries join in rowToSession().
+  // If the original save created no structured entry (e.g. transcript-only save),
+  // we insert a fresh row.  If one exists we update only followups + prayer_requests
+  // so the other columns (wins, struggles, etc.) are preserved.
+  //
+  // Idempotent: upsert on session_id conflict — safe to call on every retry.
+  if (input.action_items !== undefined || input.prayer_points !== undefined) {
+    const followups = (input.action_items ?? []).map(a => a.title);
+    const prayer_requests = (input.prayer_points ?? []).map(p => p.content);
+
+    // Check whether a structured entry row already exists for this session
+    const { data: existingEntry } = await supabase
+      .from('coach_structured_entries')
+      .select('id')
+      .eq('session_id', sessionId)
+      .eq('user_id', user.id)
+      .maybeSingle();
+
+    if (existingEntry) {
+      // Update only the derived list columns — preserve any human-written fields
+      const { error: entryUpdateError } = await supabase
+        .from('coach_structured_entries')
+        .update({ followups, prayer_requests })
+        .eq('id', existingEntry.id);
+      if (entryUpdateError) {
+        console.error('[db] updateSessionAIResults structured_entry update error:', entryUpdateError.message);
+      }
+    } else {
+      // Insert a minimal structured entry row with the AI-derived lists
+      const { error: entryInsertError } = await supabase
+        .from('coach_structured_entries')
+        .insert({
+          session_id: sessionId,
+          user_id: user.id,
+          followups,
+          prayer_requests,
+          wins: [],
+          struggles: [],
+          fears: [],
+          decisions: [],
+          people: [],
+          opportunities: [],
+          gratitude: [],
+          scripture_reflections: [],
+          habits: [],
+          finances: [],
+          health: [],
+          calling: [],
+          relationships: [],
+          leadership: [],
+        });
+      if (entryInsertError) {
+        console.error('[db] updateSessionAIResults structured_entry insert error:', entryInsertError.message);
+      }
+    }
+  }
+
+  // 5. Return the fully refreshed session (picks up all related rows via joins)
   return getSessionById(sessionId);
 }
 

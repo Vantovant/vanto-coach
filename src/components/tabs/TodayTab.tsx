@@ -34,89 +34,183 @@ import { useBibleVerse } from '@/hooks/useBibleVerse';
 import { buildScriptureUrlFromReference, buildStudyUrl } from '@/lib/bible/navigation';
 import { cn } from '@/lib/utils';
 import { useRouter } from 'next/navigation';
-import { getActionItems, getPrayerPoints, getSessions, type PrayerPointRow } from '@/lib/supabase/db';
+import { getActionItems, getPrayerPoints, getRecentSessions, type PrayerPointRow } from '@/lib/supabase/db';
 import type { CoachActionItem, CoachSession } from '@/types/coach';
 import { useAuth } from '@/context/AuthContext';
 
-// ─── Daily scripture rotation ─────────────────────────────────────────────────
-// 30 curated KJV verses — rotated deterministically by day-of-year so each day
-// feels fresh without any external API call. Easily extended.
-const DAILY_VERSES = [
-  { book: 'Proverbs', chapter: 3, verse_start: 5, verse_end: 6, text: 'Trust in the LORD with all thine heart; and lean not unto thine own understanding. In all thy ways acknowledge him, and he shall direct thy paths.', translation: 'KJV' },
-  { book: 'Philippians', chapter: 4, verse_start: 13, text: 'I can do all things through Christ which strengtheneth me.', translation: 'KJV' },
-  { book: 'Isaiah', chapter: 40, verse_start: 31, text: 'But they that wait upon the LORD shall renew their strength; they shall mount up with wings as eagles; they shall run, and not be weary; and they shall walk, and not faint.', translation: 'KJV' },
-  { book: 'Jeremiah', chapter: 29, verse_start: 11, text: 'For I know the thoughts that I think toward you, saith the LORD, thoughts of peace, and not of evil, to give you an expected end.', translation: 'KJV' },
-  { book: 'Romans', chapter: 8, verse_start: 28, text: 'And we know that all things work together for good to them that love God, to them who are the called according to his purpose.', translation: 'KJV' },
-  { book: 'Psalm', chapter: 46, verse_start: 1, text: 'God is our refuge and strength, a very present help in trouble.', translation: 'KJV' },
-  { book: 'Matthew', chapter: 6, verse_start: 33, text: 'But seek ye first the kingdom of God, and his righteousness; and all these things shall be added unto you.', translation: 'KJV' },
-  { book: 'Joshua', chapter: 1, verse_start: 9, text: 'Be strong and courageous. Do not be afraid; do not be discouraged, for the LORD your God will be with you wherever you go.', translation: 'KJV' },
-  { book: '2 Timothy', chapter: 1, verse_start: 7, text: 'For God hath not given us the spirit of fear; but of power, and of love, and of a sound mind.', translation: 'KJV' },
-  { book: 'Psalm', chapter: 23, verse_start: 1, text: 'The LORD is my shepherd; I shall not want.', translation: 'KJV' },
-  { book: 'Colossians', chapter: 3, verse_start: 23, text: 'And whatsoever ye do, do it heartily, as to the Lord, and not unto men.', translation: 'KJV' },
-  { book: 'Galatians', chapter: 5, verse_start: 22, verse_end: 23, text: 'But the fruit of the Spirit is love, joy, peace, longsuffering, gentleness, goodness, faith, Meekness, temperance: against such there is no law.', translation: 'KJV' },
-  { book: 'Psalm', chapter: 37, verse_start: 4, text: 'Delight thyself also in the LORD; and he shall give thee the desires of thine heart.', translation: 'KJV' },
-  { book: 'Ephesians', chapter: 6, verse_start: 10, text: 'Finally, my brethren, be strong in the Lord, and in the power of his might.', translation: 'KJV' },
-  { book: 'Philippians', chapter: 4, verse_start: 6, verse_end: 7, text: 'Be careful for nothing; but in every thing by prayer and supplication with thanksgiving let your requests be made known unto God. And the peace of God, which passeth all understanding, shall keep your hearts and minds through Christ Jesus.', translation: 'KJV' },
-  { book: 'James', chapter: 1, verse_start: 5, text: 'If any of you lack wisdom, let him ask of God, that giveth to all men liberally, and upbraideth not; and it shall be given him.', translation: 'KJV' },
-  { book: '1 Peter', chapter: 5, verse_start: 7, text: 'Casting all your care upon him; for he careth for you.', translation: 'KJV' },
-  { book: 'Romans', chapter: 12, verse_start: 2, text: 'And be not conformed to this world: but be ye transformed by the renewing of your mind, that ye may prove what is that good, and acceptable, and perfect, will of God.', translation: 'KJV' },
-  { book: 'Psalm', chapter: 119, verse_start: 105, text: 'Thy word is a lamp unto my feet, and a light unto my path.', translation: 'KJV' },
-  { book: 'Isaiah', chapter: 41, verse_start: 10, text: 'Fear thou not; for I am with thee: be not dismayed; for I am thy God: I will strengthen thee; yea, I will help thee; yea, I will uphold thee with the right hand of my righteousness.', translation: 'KJV' },
-  { book: 'Hebrews', chapter: 11, verse_start: 1, text: 'Now faith is the substance of things hoped for, the evidence of things not seen.', translation: 'KJV' },
-  { book: 'Proverbs', chapter: 16, verse_start: 3, text: 'Commit thy works unto the LORD, and thy thoughts shall be established.', translation: 'KJV' },
-  { book: 'Matthew', chapter: 11, verse_start: 28, text: 'Come unto me, all ye that labour and are heavy laden, and I will give you rest.', translation: 'KJV' },
-  { book: 'Psalm', chapter: 27, verse_start: 1, text: 'The LORD is my light and my salvation; whom shall I fear? the LORD is the strength of my life; of whom shall I be afraid?', translation: 'KJV' },
-  { book: 'John', chapter: 14, verse_start: 27, text: 'Peace I leave with you, my peace I give unto you: not as the world giveth, give I unto you. Let not your heart be troubled, neither let it be afraid.', translation: 'KJV' },
-  { book: 'Proverbs', chapter: 11, verse_start: 14, text: 'Where no counsel is, the people fall: but in the multitude of counsellors there is safety.', translation: 'KJV' },
-  { book: 'Psalm', chapter: 1, verse_start: 1, verse_end: 2, text: 'Blessed is the man that walketh not in the counsel of the ungodly, nor standeth in the way of sinners, nor sitteth in the seat of the scornful. But his delight is in the law of the LORD; and in his law doth he meditate day and night.', translation: 'KJV' },
-  { book: 'Philippians', chapter: 4, verse_start: 19, text: 'But my God shall supply all your need according to his riches in glory by Christ Jesus.', translation: 'KJV' },
-  { book: 'Proverbs', chapter: 18, verse_start: 21, text: 'Death and life are in the power of the tongue: and they that love it shall eat the fruit thereof.', translation: 'KJV' },
-  { book: 'Ecclesiastes', chapter: 4, verse_start: 9, verse_end: 10, text: 'Two are better than one; because they have a good reward for their labour. For if they fall, the one will lift up his fellow.', translation: 'KJV' },
-] as const;
+// ─── Scripture verse pool, tagged by theme ────────────────────────────────────
+// Each verse carries tags matching mood keywords, life areas, and spiritual topics.
+// getContextVerse() scores the pool against real session signals.
+type TaggedVerse = {
+  book: string; chapter: number; verse_start: number; verse_end?: number;
+  text: string; translation: string;
+  tags: string[];
+};
+const VERSE_POOL: TaggedVerse[] = [
+  { book: 'Proverbs', chapter: 3, verse_start: 5, verse_end: 6, text: 'Trust in the LORD with all thine heart; and lean not unto thine own understanding. In all thy ways acknowledge him, and he shall direct thy paths.', translation: 'KJV', tags: ['anxious', 'stressed', 'confused', 'guidance', 'faith', 'decisions'] },
+  { book: 'Philippians', chapter: 4, verse_start: 13, text: 'I can do all things through Christ which strengtheneth me.', translation: 'KJV', tags: ['overwhelmed', 'discouraged', 'business', 'leadership', 'strength', 'determined'] },
+  { book: 'Isaiah', chapter: 40, verse_start: 31, text: 'But they that wait upon the LORD shall renew their strength; they shall mount up with wings as eagles; they shall run, and not be weary; and they shall walk, and not faint.', translation: 'KJV', tags: ['tired', 'overwhelmed', 'health', 'rest', 'renewal', 'faith'] },
+  { book: 'Jeremiah', chapter: 29, verse_start: 11, text: 'For I know the thoughts that I think toward you, saith the LORD, thoughts of peace, and not of evil, to give you an expected end.', translation: 'KJV', tags: ['anxious', 'worried', 'future', 'calling', 'hopeful', 'purpose'] },
+  { book: 'Romans', chapter: 8, verse_start: 28, text: 'And we know that all things work together for good to them that love God, to them who are the called according to his purpose.', translation: 'KJV', tags: ['discouraged', 'frustrated', 'calling', 'faith', 'trust', 'growth'] },
+  { book: 'Psalm', chapter: 46, verse_start: 1, text: 'God is our refuge and strength, a very present help in trouble.', translation: 'KJV', tags: ['anxious', 'stressed', 'overwhelmed', 'family', 'finances', 'crisis'] },
+  { book: 'Matthew', chapter: 6, verse_start: 33, text: 'But seek ye first the kingdom of God, and his righteousness; and all these things shall be added unto you.', translation: 'KJV', tags: ['finances', 'business', 'provision', 'priorities', 'prayer'] },
+  { book: '2 Timothy', chapter: 1, verse_start: 7, text: 'For God hath not given us the spirit of fear; but of power, and of love, and of a sound mind.', translation: 'KJV', tags: ['anxious', 'afraid', 'worried', 'leadership', 'courage', 'fear'] },
+  { book: 'Psalm', chapter: 23, verse_start: 1, text: 'The LORD is my shepherd; I shall not want.', translation: 'KJV', tags: ['peaceful', 'provision', 'finances', 'grateful', 'faith', 'rest'] },
+  { book: 'Colossians', chapter: 3, verse_start: 23, text: 'And whatsoever ye do, do it heartily, as to the Lord, and not unto men.', translation: 'KJV', tags: ['business', 'work', 'leadership', 'calling', 'excellence', 'determined'] },
+  { book: 'Galatians', chapter: 5, verse_start: 22, verse_end: 23, text: 'But the fruit of the Spirit is love, joy, peace, longsuffering, gentleness, goodness, faith, Meekness, temperance: against such there is no law.', translation: 'KJV', tags: ['frustrated', 'angry', 'spiritual', 'growth', 'relationships', 'self-control'] },
+  { book: 'Psalm', chapter: 37, verse_start: 4, text: 'Delight thyself also in the LORD; and he shall give thee the desires of thine heart.', translation: 'KJV', tags: ['hopeful', 'joyful', 'grateful', 'faith', 'purpose', 'calling'] },
+  { book: 'Philippians', chapter: 4, verse_start: 6, verse_end: 7, text: 'Be careful for nothing; but in every thing by prayer and supplication with thanksgiving let your requests be made known unto God. And the peace of God, which passeth all understanding, shall keep your hearts and minds through Christ Jesus.', translation: 'KJV', tags: ['anxious', 'worried', 'prayer', 'stress', 'peace', 'spiritual'] },
+  { book: 'James', chapter: 1, verse_start: 5, text: 'If any of you lack wisdom, let him ask of God, that giveth to all men liberally, and upbraideth not; and it shall be given him.', translation: 'KJV', tags: ['confused', 'decisions', 'guidance', 'leadership', 'business', 'wisdom'] },
+  { book: '1 Peter', chapter: 5, verse_start: 7, text: 'Casting all your care upon him; for he careth for you.', translation: 'KJV', tags: ['anxious', 'stressed', 'overwhelmed', 'prayer', 'burden', 'family'] },
+  { book: 'Romans', chapter: 12, verse_start: 2, text: 'And be not conformed to this world: but be ye transformed by the renewing of your mind, that ye may prove what is that good, and acceptable, and perfect, will of God.', translation: 'KJV', tags: ['growth', 'spiritual', 'faith', 'renewal', 'calling', 'transformation'] },
+  { book: 'Psalm', chapter: 119, verse_start: 105, text: 'Thy word is a lamp unto my feet, and a light unto my path.', translation: 'KJV', tags: ['confused', 'guidance', 'decisions', 'faith', 'scripture', 'spiritual'] },
+  { book: 'Isaiah', chapter: 41, verse_start: 10, text: 'Fear thou not; for I am with thee: be not dismayed; for I am thy God: I will strengthen thee; yea, I will help thee; yea, I will uphold thee with the right hand of my righteousness.', translation: 'KJV', tags: ['anxious', 'afraid', 'overwhelmed', 'business', 'strength', 'courage'] },
+  { book: 'Hebrews', chapter: 11, verse_start: 1, text: 'Now faith is the substance of things hoped for, the evidence of things not seen.', translation: 'KJV', tags: ['hopeful', 'faith', 'calling', 'uncertain', 'trust', 'spiritual'] },
+  { book: 'Proverbs', chapter: 16, verse_start: 3, text: 'Commit thy works unto the LORD, and thy thoughts shall be established.', translation: 'KJV', tags: ['business', 'leadership', 'planning', 'calling', 'work', 'decisions'] },
+  { book: 'Matthew', chapter: 11, verse_start: 28, text: 'Come unto me, all ye that labour and are heavy laden, and I will give you rest.', translation: 'KJV', tags: ['tired', 'overwhelmed', 'stressed', 'rest', 'burnout', 'health'] },
+  { book: 'John', chapter: 14, verse_start: 27, text: 'Peace I leave with you, my peace I give unto you: not as the world giveth, give I unto you. Let not your heart be troubled, neither let it be afraid.', translation: 'KJV', tags: ['anxious', 'worried', 'afraid', 'peace', 'spiritual', 'relationships'] },
+  { book: 'Philippians', chapter: 4, verse_start: 19, text: 'But my God shall supply all your need according to his riches in glory by Christ Jesus.', translation: 'KJV', tags: ['finances', 'provision', 'worried', 'family', 'trust', 'prayer'] },
+  { book: 'Proverbs', chapter: 11, verse_start: 14, text: 'Where no counsel is, the people fall: but in the multitude of counsellors there is safety.', translation: 'KJV', tags: ['leadership', 'decisions', 'business', 'guidance', 'team', 'wisdom'] },
+  { book: 'Ephesians', chapter: 6, verse_start: 10, text: 'Finally, my brethren, be strong in the Lord, and in the power of his might.', translation: 'KJV', tags: ['discouraged', 'spiritual', 'strength', 'battle', 'leadership', 'faith'] },
+  { book: 'Joshua', chapter: 1, verse_start: 9, text: 'Be strong and courageous. Do not be afraid; do not be discouraged, for the LORD your God will be with you wherever you go.', translation: 'KJV', tags: ['discouraged', 'afraid', 'new', 'calling', 'leadership', 'courage'] },
+  { book: 'Psalm', chapter: 27, verse_start: 1, text: 'The LORD is my light and my salvation; whom shall I fear? the LORD is the strength of my life; of whom shall I be afraid?', translation: 'KJV', tags: ['afraid', 'uncertain', 'faith', 'strength', 'trust', 'courage'] },
+  { book: 'Ecclesiastes', chapter: 4, verse_start: 9, verse_end: 10, text: 'Two are better than one; because they have a good reward for their labour. For if they fall, the one will lift up his fellow.', translation: 'KJV', tags: ['relationships', 'family', 'marriage', 'team', 'lonely', 'community'] },
+  { book: 'Proverbs', chapter: 18, verse_start: 21, text: 'Death and life are in the power of the tongue: and they that love it shall eat the fruit thereof.', translation: 'KJV', tags: ['relationships', 'leadership', 'communication', 'conflict', 'growth', 'family'] },
+  { book: 'Psalm', chapter: 1, verse_start: 1, verse_end: 2, text: 'Blessed is the man that walketh not in the counsel of the ungodly, nor standeth in the way of sinners, nor sitteth in the seat of the scornful. But his delight is in the law of the LORD; and in his law doth he meditate day and night.', translation: 'KJV', tags: ['spiritual', 'faith', 'growth', 'meditation', 'scripture', 'calling'] },
+];
 
-function getDailyVerse() {
-  const now = new Date();
-  const start = new Date(now.getFullYear(), 0, 0);
-  const dayOfYear = Math.floor((now.getTime() - start.getTime()) / 86_400_000);
-  return DAILY_VERSES[dayOfYear % DAILY_VERSES.length];
+/**
+ * Score each verse against signals from recent sessions, prayer points, and actions.
+ * Returns the highest-scoring verse, falling back to a day-of-year default.
+ */
+function getContextVerse(
+  recentSessions: CoachSession[],
+  prayerPoints: PrayerPointRow[],
+  actionItems: CoachActionItem[]
+): TaggedVerse {
+  // Collect context signals
+  const signals: string[] = [];
+  for (const s of recentSessions.slice(0, 3)) {
+    if (s.mood) signals.push(s.mood);
+    (s.life_areas ?? []).forEach(a => signals.push(a));
+    (s.spiritual_topics ?? []).forEach(t => signals.push(t));
+  }
+  if (actionItems.length >= 3) signals.push('business', 'planning');
+  if (prayerPoints.length > 0) signals.push('prayer');
+
+  if (signals.length === 0) {
+    // No sessions yet — use day-of-year rotation as fallback
+    const now = new Date();
+    const dayOfYear = Math.floor((now.getTime() - new Date(now.getFullYear(), 0, 0).getTime()) / 86_400_000);
+    return VERSE_POOL[dayOfYear % VERSE_POOL.length];
+  }
+
+  // Score each verse by tag overlap with context signals
+  const signalSet = new Set(signals.map(s => s.toLowerCase()));
+  let bestVerse = VERSE_POOL[0];
+  let bestScore = -1;
+  for (const verse of VERSE_POOL) {
+    const score = verse.tags.filter(t => signalSet.has(t)).length;
+    if (score > bestScore) { bestScore = score; bestVerse = verse; }
+  }
+  return bestVerse;
 }
 
-// ─── Briefing derivation from real session data ───────────────────────────────
+// ─── Briefing derivation from multiple recent sessions ────────────────────────
 function deriveBriefing(
-  latestSession: CoachSession | null,
+  recentSessions: CoachSession[],
   actionItems: CoachActionItem[],
   prayerPoints: PrayerPointRow[]
 ) {
   const hour = new Date().getHours();
   const greetingWord = hour < 12 ? 'morning' : hour < 17 ? 'afternoon' : 'evening';
+  const latest = recentSessions[0] ?? null;
 
-  const greeting = latestSession?.summary
-    ? `This ${greetingWord}, carry forward what your last entry revealed: ${latestSession.summary.slice(0, 120)}${latestSession.summary.length > 120 ? '...' : ''}`
-    : `Welcome back. Record a new entry to begin today's reflection.`;
+  // ── Greeting — specific, grounded, never pastes a raw summary ──────────────
+  let greeting: string;
+  if (!latest) {
+    greeting = `Good ${greetingWord}. Record your first diary entry to begin your coaching journey.`;
+  } else {
+    const moodNote = latest.mood ? ` You entered your last session feeling ${latest.mood}.` : '';
+    const pendingCount = actionItems.filter(a => a.status === 'pending').length;
+    const pendingNote = pendingCount > 0 ? ` You have ${pendingCount} pending action${pendingCount > 1 ? 's' : ''} to carry forward.` : '';
+    greeting = `Good ${greetingWord}.${moodNote}${pendingNote}`;
+  }
 
-  const topAreas = latestSession?.life_areas?.slice(0, 2) ?? [];
-  const todaysFocus = topAreas.length > 0
-    ? `Your recent focus areas are ${topAreas.join(' and ')}. Bring intentionality to these today.`
-    : 'Be present and intentional in every area of your life today.';
+  // ── Today's Focus — derived from the most active life area across sessions ──
+  const areaCounts: Record<string, number> = {};
+  for (const s of recentSessions.slice(0, 5)) {
+    for (const area of (s.life_areas ?? [])) {
+      areaCounts[area] = (areaCounts[area] ?? 0) + 1;
+    }
+  }
+  const topAreas = Object.entries(areaCounts).sort((a, b) => b[1] - a[1]).map(([k]) => k).slice(0, 2);
+  const criticalAction = actionItems.find(a => a.priority === 'critical' && a.status === 'pending');
 
-  const spiritualFocus = latestSession?.spiritual_topics?.length
-    ? `Continue exploring the spiritual themes from your last entry: ${latestSession.spiritual_topics.slice(0, 2).join(', ')}.`
-    : 'Begin your day with prayer and Scripture before anything else.';
+  let todaysFocus: string;
+  if (criticalAction) {
+    todaysFocus = `Your most critical commitment today: "${criticalAction.title}". Make it the first thing you address.`;
+  } else if (topAreas.length > 0) {
+    todaysFocus = `Across your recent entries, ${topAreas.join(' and ')} have surfaced most. Bring deliberate focus to ${topAreas[0]} today.`;
+  } else {
+    todaysFocus = 'Be present and intentional in every area of your life today.';
+  }
 
+  // ── Spiritual Focus — built from recurring spiritual themes across sessions ─
+  const topicCounts: Record<string, number> = {};
+  for (const s of recentSessions.slice(0, 5)) {
+    for (const t of (s.spiritual_topics ?? [])) {
+      topicCounts[t] = (topicCounts[t] ?? 0) + 1;
+    }
+  }
+  const topTopics = Object.entries(topicCounts).sort((a, b) => b[1] - a[1]).map(([k]) => k).slice(0, 2);
+
+  let spiritualFocus: string;
+  if (topTopics.length > 0) {
+    spiritualFocus = `Your recent entries have centred on ${topTopics.join(' and ')}. Let these guide your prayer and devotion today.`;
+  } else if (prayerPoints.length > 0) {
+    spiritualFocus = `You have ${prayerPoints.length} active prayer request${prayerPoints.length > 1 ? 's' : ''}. Bring them before God specifically this morning.`;
+  } else {
+    spiritualFocus = 'Begin today with prayer and Scripture before anything else.';
+  }
+
+  // ── Top actions — prioritised, pending or approved only ────────────────────
   const topActionItems = actionItems
     .filter(a => a.status === 'pending' || a.status === 'approved')
+    .sort((a, b) => {
+      const pri = { critical: 0, high: 1, medium: 2, low: 3 };
+      return (pri[a.priority as keyof typeof pri] ?? 2) - (pri[b.priority as keyof typeof pri] ?? 2);
+    })
     .slice(0, 3)
     .map(a => ({ title: a.title, priority: a.priority, category: a.category, due_date: a.due_date }));
 
-  const prayerAreas = prayerPoints.slice(0, 3).map(p => p.category ?? p.content.slice(0, 30));
+  // ── Prayer areas — content-first, not just categories ──────────────────────
+  const prayerAreas = prayerPoints.slice(0, 3).map(p =>
+    p.category ? p.category : p.content.slice(0, 35).replace(/\s+$/, '') + (p.content.length > 35 ? '…' : '')
+  );
 
   const prayerTheme = prayerPoints.length > 0
-    ? `You have ${prayerPoints.length} active prayer ${prayerPoints.length === 1 ? 'request' : 'requests'} to bring before God today.`
+    ? `You have ${prayerPoints.length} active prayer ${prayerPoints.length === 1 ? 'request' : 'requests'}. Bring each one to God with expectation today.`
     : 'Bring your needs and gratitude before God in prayer today.';
 
-  const patternInsight = latestSession?.mood
-    ? `Your last recorded mood was ${latestSession.mood}. Notice what shaped it and bring that awareness into today.`
-    : null;
+  // ── Pattern insight — compare mood across recent sessions for real contrast ─
+  let patternInsight: string | null = null;
+  if (recentSessions.length >= 2) {
+    const moods = recentSessions.slice(0, 5).map(s => s.mood).filter(Boolean) as string[];
+    const positive = ['grateful', 'joyful', 'hopeful', 'peaceful', 'determined', 'confident', 'encouraged'];
+    const negative = ['anxious', 'stressed', 'overwhelmed', 'discouraged', 'frustrated', 'confused', 'worried'];
+    const posCount = moods.filter(m => positive.includes(m)).length;
+    const negCount = moods.filter(m => negative.includes(m)).length;
+    if (negCount > posCount && negCount >= 2) {
+      patternInsight = `Your last ${moods.length} entries show a recurring ${recentSessions[0]?.mood ?? 'challenging'} pattern. This is worth bringing intentionally to prayer and reflection.`;
+    } else if (posCount > negCount && posCount >= 2) {
+      patternInsight = `Your recent entries reflect consistent ${recentSessions[0]?.mood ?? 'positive'} momentum. Protect the habits and conditions creating it.`;
+    } else if (latest?.mood) {
+      patternInsight = `Your most recent entry was recorded with a ${latest.mood} disposition. Reflect on what shaped it.`;
+    }
+  } else if (latest?.mood) {
+    patternInsight = `Your most recent entry was recorded with a ${latest.mood} disposition. Reflect on what shaped it.`;
+  }
 
   return { greeting, todaysFocus, spiritualFocus, topActionItems, prayerAreas, prayerTheme, patternInsight };
 }
@@ -127,7 +221,7 @@ export function TodayTab() {
   const [greeting, setGreeting] = React.useState('');
   const [actionItems, setActionItems] = React.useState<CoachActionItem[]>([]);
   const [prayerPoints, setPrayerPoints] = React.useState<PrayerPointRow[]>([]);
-  const [latestSession, setLatestSession] = React.useState<CoachSession | null>(null);
+  const [recentSessions, setRecentSessions] = React.useState<CoachSession[]>([]);
 
   React.useEffect(() => {
     const today = new Date();
@@ -139,17 +233,21 @@ export function TodayTab() {
     if (!user) return;
     getActionItems().then(setActionItems);
     getPrayerPoints('active').then(setPrayerPoints);
-    getSessions().then(sessions => setLatestSession(sessions[0] ?? null));
+    // Load only the 5 most recent sessions — no need to fetch full history
+    getRecentSessions(5).then(setRecentSessions);
   }, [user]);
 
-  // Derive all briefing content from real persisted data
+  // Derive all briefing content from real persisted data (multi-session)
   const briefing = React.useMemo(
-    () => deriveBriefing(latestSession, actionItems, prayerPoints),
-    [latestSession, actionItems, prayerPoints]
+    () => deriveBriefing(recentSessions, actionItems, prayerPoints),
+    [recentSessions, actionItems, prayerPoints]
   );
 
-  // Daily verse — deterministic rotation by day, no external API
-  const dailyVerse = React.useMemo(() => getDailyVerse(), []);
+  // Context-aware verse — scored against real session signals
+  const dailyVerse = React.useMemo(
+    () => getContextVerse(recentSessions, prayerPoints, actionItems),
+    [recentSessions, prayerPoints, actionItems]
+  );
 
   // Get the scripture reference string for cross-references
   const scriptureRef = `${dailyVerse.book} ${dailyVerse.chapter}:${dailyVerse.verse_start}`;

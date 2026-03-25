@@ -42,7 +42,88 @@ export async function getSessions(): Promise<CoachSession[]> {
 
   return (data ?? []).map(rowToSession);
 }
+export const SESSION_PAGE_SIZE = 20;
 
+export interface SessionsPageResult {
+  sessions: CoachSession[];
+  nextCursor: string | null;
+}
+
+export async function getRecentSessions(limit = 5): Promise<CoachSession[]> {
+  const sessions = await getSessions();
+  return sessions.slice(0, limit);
+}
+
+export async function getSessionsPage(
+  limit = SESSION_PAGE_SIZE,
+  cursor: string | null = null,
+  mood?: string | null,
+  search?: string | null
+): Promise<SessionsPageResult> {
+  const sessions = await getSessions();
+
+  const normalizedMood =
+    mood && mood.trim() !== '' && mood.toLowerCase() !== 'all'
+      ? mood.toLowerCase()
+      : null;
+
+  const normalizedSearch =
+    search && search.trim() !== ''
+      ? search.toLowerCase().trim()
+      : null;
+
+  const filtered = sessions.filter((session) => {
+    const s = session as unknown as Record<string, unknown>;
+
+    if (normalizedMood) {
+      const sessionMood =
+        typeof s.mood === 'string' ? s.mood.toLowerCase() : '';
+
+      if (sessionMood !== normalizedMood) {
+        return false;
+      }
+    }
+
+    if (normalizedSearch) {
+      const haystack = [
+        s.id,
+        s.title,
+        s.summary,
+        s.mood,
+        s.cleaned_transcript,
+        s.raw_transcript,
+        s.coach_response,
+      ]
+        .filter((value): value is string => typeof value === 'string')
+        .join(' ')
+        .toLowerCase();
+
+      if (!haystack.includes(normalizedSearch)) {
+        return false;
+      }
+    }
+
+    return true;
+  });
+
+  const startIndex = cursor
+    ? Math.max(
+        0,
+        filtered.findIndex((session) => session.id === cursor) + 1
+      )
+    : 0;
+
+  const page = filtered.slice(startIndex, startIndex + limit);
+  const nextCursor =
+    startIndex + limit < filtered.length && page.length > 0
+      ? page[page.length - 1].id
+      : null;
+
+  return {
+    sessions: page,
+    nextCursor,
+  };
+}
 export async function getSessionById(id: string): Promise<CoachSession | null> {
   const supabase = createClient();
   const { data, error } = await supabase

@@ -30,9 +30,14 @@ yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 
-# env files — never commit secrets
-# .env.local # Removed by Orchids to allow .env files
-# .env*.local # Removed by Orchids to allow .env files
+# env files - never commit secrets
+.env
+.env.*
+!.env.example
+
+# Orchids / generated artifacts
+.orchids/
+*.tar.gz
 
 # vercel
 .vercel

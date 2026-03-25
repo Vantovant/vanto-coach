@@ -37,6 +37,7 @@ import { useRouter } from 'next/navigation';
 import { getActionItems, getPrayerPoints, getRecentSessions, type PrayerPointRow } from '@/lib/supabase/db';
 import type { CoachActionItem, CoachSession } from '@/types/coach';
 import { useAuth } from '@/context/AuthContext';
+import { toast } from 'sonner';
 
 // ─── Scripture verse pool, tagged by theme ────────────────────────────────────
 // Each verse carries tags matching mood keywords, life areas, and spiritual topics.
@@ -416,7 +417,11 @@ export function TodayTab() {
                   </div>
                 )}
               </div>
-              <Button variant="outline" className="w-full gap-2">
+              <Button
+                variant="outline"
+                className="w-full gap-2"
+                onClick={() => toast.info('Guided prayer time coming soon')}
+              >
                 <Heart className="h-4 w-4" />
                 Start Prayer Time
               </Button>
@@ -508,6 +513,11 @@ export function TodayTab() {
                 {prayerPoints.length} active
               </Badge>
             </div>
+            {prayerPoints.length > 3 && (
+              <p className="text-xs text-muted-foreground mt-1 ml-10">
+                Showing 3 of {prayerPoints.length}
+              </p>
+            )}
           </CardHeader>
           <CardContent>
             <div className="space-y-2.5">
@@ -588,7 +598,12 @@ function ScriptureForTodayCard({ scripture, scriptureRef }: ScriptureForTodayCar
         </blockquote>
 
         <div className="flex items-center gap-3">
-          <Button variant="outline" size="sm" className="gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            className="gap-2"
+            onClick={() => toast.info('Guided meditation coming soon')}
+          >
             <Play className="h-3 w-3" />
             Meditate
           </Button>

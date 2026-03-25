@@ -44,6 +44,7 @@ import type { CoachInsight, GrowthArea, LifeBalanceScore } from '@/types/coach';
 import { cn } from '@/lib/utils';
 import { getRecentSessions } from '@/lib/supabase/db';
 import { useAuth } from '@/context/AuthContext';
+import { toast } from 'sonner';
 
 export function InsightsTab() {
   const { user } = useAuth();
@@ -156,10 +157,26 @@ export function InsightsTab() {
                   <SelectItem value="quarter">Quarter</SelectItem>
                 </SelectContent>
               </Select>
-              <Button variant="outline" size="icon">
+              <Button
+                variant="outline"
+                size="icon"
+                onClick={() => {
+                  // Force re-fetch by resetting insight and re-triggering the effect
+                  setInsight(null);
+                  setLoading(true);
+                  // Briefly toggle period to re-trigger useEffect, then restore
+                  const cur = period;
+                  setPeriod(cur === 'week' ? 'month' : 'week');
+                  requestAnimationFrame(() => setPeriod(cur));
+                }}
+              >
                 <RefreshCw className="h-4 w-4" />
               </Button>
-              <Button variant="outline" size="icon">
+              <Button
+                variant="outline"
+                size="icon"
+                onClick={() => toast.info('Insight export coming soon')}
+              >
                 <Download className="h-4 w-4" />
               </Button>
             </div>
@@ -313,14 +330,20 @@ export function InsightsTab() {
                 </div>
               </CardHeader>
               <CardContent>
-                <ul className="space-y-2">
-                  {insight.challenges.map((challenge, idx) => (
-                    <li key={idx} className="flex items-center gap-2 text-sm">
-                      <div className="h-1.5 w-1.5 rounded-full bg-warning" />
-                      {challenge}
-                    </li>
-                  ))}
-                </ul>
+                {insight.challenges.length === 0 ? (
+                  <p className="text-sm text-muted-foreground py-1">
+                    No struggles recorded in this period. Keep journaling to surface patterns.
+                  </p>
+                ) : (
+                  <ul className="space-y-2">
+                    {insight.challenges.map((challenge, idx) => (
+                      <li key={idx} className="flex items-center gap-2 text-sm">
+                        <div className="h-1.5 w-1.5 rounded-full bg-warning" />
+                        {challenge}
+                      </li>
+                    ))}
+                  </ul>
+                )}
               </CardContent>
             </Card>
           </TabsContent>
@@ -377,7 +400,12 @@ export function InsightsTab() {
                       </div>
                       <div>
                         <p className="font-medium text-sm">{rec}</p>
-                        <Button variant="link" size="sm" className="px-0 mt-1 h-auto">
+                        <Button
+                          variant="link"
+                          size="sm"
+                          className="px-0 mt-1 h-auto"
+                          onClick={() => toast.info('Action creation from insights coming soon')}
+                        >
                           Create Action
                           <ArrowRight className="h-3 w-3 ml-1" />
                         </Button>
@@ -419,11 +447,21 @@ export function InsightsTab() {
                   Create a comprehensive executive life coaching report with AI-powered analysis.
                 </p>
                 <div className="flex justify-center gap-2">
-                  <Button variant="outline" className="gap-2">
+                  <Button
+                    variant="outline"
+                    className="gap-2"
+                    onClick={() => {
+                      setPeriod('week');
+                      toast.info('Switched to 7-day view');
+                    }}
+                  >
                     <BarChart3 className="h-4 w-4" />
                     7-Day Analysis
                   </Button>
-                  <Button className="gap-2">
+                  <Button
+                    className="gap-2"
+                    onClick={() => toast.info('Full coaching report coming soon')}
+                  >
                     <Sparkles className="h-4 w-4" />
                     Full Coaching Report
                   </Button>

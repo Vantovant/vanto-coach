@@ -59,6 +59,7 @@ import type { BibleBook, BibleVerse, ScriptureReference } from '@/types/coach';
 import { cn } from '@/lib/utils';
 import { getScriptureParamsFromUrl, type ScriptureNavigation } from '@/lib/bible/navigation';
 import { RelatedVersesStudy } from '@/components/bible/RelatedVersesStudy';
+import { toast } from 'sonner';
 
 export function ScriptureTab() {
   const searchParams = useSearchParams();
@@ -423,7 +424,21 @@ export function ScriptureTab() {
 
             <div className="grid gap-4 md:grid-cols-2">
               {topicalScriptures.map((topic) => (
-                <Card key={topic.topic} className="card-premium hover:shadow-lg transition-all cursor-pointer">
+                <Card
+                  key={topic.topic}
+                  className="card-premium hover:shadow-lg transition-all cursor-pointer"
+                  onClick={() => {
+                    // Navigate to the first verse of this topic in the reader
+                    const first = topic.verses[0];
+                    if (first) {
+                      setSelectedBook(first.book);
+                      setSelectedChapter(first.chapter);
+                      setActiveTab('read');
+                    } else {
+                      toast.info('No verses available for this topic yet');
+                    }
+                  }}
+                >
                   <CardHeader className="pb-3">
                     <CardTitle className="text-base">{topic.topic}</CardTitle>
                     <CardDescription className="text-sm">
@@ -444,7 +459,15 @@ export function ScriptureTab() {
                         </div>
                       ))}
                     </div>
-                    <Button variant="link" size="sm" className="px-0 mt-2">
+                    <Button
+                      variant="link"
+                      size="sm"
+                      className="px-0 mt-2"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        toast.info('Full topic verse list coming soon');
+                      }}
+                    >
                       View all {topic.verses.length} verses
                     </Button>
                   </CardContent>
@@ -531,6 +554,11 @@ export function ScriptureTab() {
                     <div
                       key={idx}
                       className="flex items-center justify-between p-3 rounded-lg bg-muted/50 hover:bg-muted cursor-pointer transition-colors"
+                      onClick={() => {
+                        setSelectedBook(item.book);
+                        setSelectedChapter(item.chapter);
+                        setActiveTab('read');
+                      }}
                     >
                       <div className="flex items-center gap-3">
                         <BookMarked className="h-4 w-4 text-accent" />

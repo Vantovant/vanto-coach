@@ -6,6 +6,7 @@
  */
 
 import { createClient } from './client';
+import { captureMessage } from '@/lib/monitoring';
 
 const BUCKET = 'coach-audio';
 
@@ -21,7 +22,9 @@ export async function uploadAudio(
 
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) {
-    console.error('[storage] uploadAudio: no authenticated user');
+    captureMessage('uploadAudio: no authenticated user', 'error', {
+      context: 'storage:uploadAudio',
+    });
     return null;
   }
 
@@ -41,7 +44,11 @@ export async function uploadAudio(
     });
 
   if (error) {
-    console.error('[storage] uploadAudio error:', error.message);
+    captureMessage(`uploadAudio failed: ${error.message}`, 'error', {
+      context: 'storage:uploadAudio',
+      userId: user.id,
+      storagePath: path,
+    });
     return null;
   }
 
@@ -59,7 +66,10 @@ export async function getSignedAudioUrl(path: string): Promise<string | null> {
     .createSignedUrl(path, 3600);
 
   if (error || !data) {
-    console.error('[storage] getSignedAudioUrl error:', error?.message);
+    captureMessage(`getSignedAudioUrl failed: ${error?.message ?? 'no data'}`, 'warning', {
+      context: 'storage:getSignedAudioUrl',
+      storagePath: path,
+    });
     return null;
   }
 
@@ -77,7 +87,10 @@ export async function deleteAudio(path: string): Promise<boolean> {
     .remove([path]);
 
   if (error) {
-    console.error('[storage] deleteAudio error:', error.message);
+    captureMessage(`deleteAudio failed: ${error.message}`, 'error', {
+      context: 'storage:deleteAudio',
+      storagePath: path,
+    });
     return false;
   }
 

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { AI_CONFIG, AI_PROMPTS, type AIProcessingRequest, type AIProcessingResponse, type ProcessedTranscriptData } from '@/lib/ai/config';
+import { captureError, captureMessage } from '@/lib/monitoring';
 
 // Check if OpenAI API key is configured
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
@@ -18,7 +19,10 @@ export async function POST(request: NextRequest): Promise<NextResponse<AIProcess
 
     // If no API key, use fallback local processing
     if (!OPENAI_API_KEY) {
-      console.log('OpenAI API key not configured, using fallback processing');
+      captureMessage('OpenAI API key not configured — using fallback processing', 'warning', {
+        context: 'api:process-transcript',
+        route: '/api/ai/process-transcript',
+      });
       const fallbackResult = processTranscriptLocally(transcript);
       return NextResponse.json({
         success: true,
@@ -55,7 +59,12 @@ export async function POST(request: NextRequest): Promise<NextResponse<AIProcess
 
       if (!openAIResponse.ok) {
         const errorData = await openAIResponse.json().catch(() => ({}));
-        console.error('OpenAI API error:', errorData);
+        captureMessage(`OpenAI API returned ${openAIResponse.status}`, 'error', {
+          context: 'api:process-transcript',
+          route: '/api/ai/process-transcript',
+          statusCode: openAIResponse.status,
+          errorData,
+        });
 
         // Fall back to local processing on API error
         const fallbackResult = processTranscriptLocally(transcript);
@@ -97,7 +106,11 @@ export async function POST(request: NextRequest): Promise<NextResponse<AIProcess
       });
 
     } catch (apiError) {
-      console.error('OpenAI processing error:', apiError);
+      captureError(apiError, {
+        context: 'api:process-transcript',
+        route: '/api/ai/process-transcript',
+        operation: 'openai-call',
+      });
 
       // Fall back to local processing
       const fallbackResult = processTranscriptLocally(transcript);
@@ -109,7 +122,11 @@ export async function POST(request: NextRequest): Promise<NextResponse<AIProcess
     }
 
   } catch (error) {
-    console.error('Request processing error:', error);
+    captureError(error, {
+      context: 'api:process-transcript',
+      route: '/api/ai/process-transcript',
+      operation: 'request-parse',
+    });
     return NextResponse.json({
       success: false,
       error: 'Failed to process transcript',

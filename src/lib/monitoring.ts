@@ -1,14 +1,15 @@
 /**
  * Centralized monitoring / error-capture layer.
  *
- * Currently writes structured logs to the console and is intentionally
- * designed so it can be swapped for Sentry, Datadog, or LogRocket by
- * replacing the `reportToService()` call at the bottom of this file.
+ * Routes all captures through Sentry when NEXT_PUBLIC_SENTRY_DSN is set,
+ * and always writes structured logs to the console for local visibility.
  *
  * Usage:
  *   captureError(err, { context: 'diary:save', userId, sessionId })
  *   captureMessage('Processing timed out', 'warning', { context: 'diary:process', userId, sessionId })
  */
+
+import * as Sentry from '@sentry/nextjs';
 
 export type MonitoringSeverity = 'info' | 'warning' | 'error' | 'fatal';
 
@@ -40,7 +41,7 @@ export function captureError(
   const message = err instanceof Error ? err.message : String(err);
   const stack = err instanceof Error ? err.stack : undefined;
 
-  reportToService('error', message, { ...meta, stack });
+  reportToService('error', message, { ...meta, stack }, err);
 }
 
 /**
@@ -51,17 +52,18 @@ export function captureMessage(
   severity: MonitoringSeverity,
   meta: MonitoringContext,
 ): void {
-  reportToService(severity, message, meta);
+  reportToService(severity, message, meta, null);
 }
 
 // ──────────────────────────────────────────────────────────────
-// Transport layer — swap this for Sentry / Datadog / LogRocket
+// Transport layer — Sentry + console
 // ──────────────────────────────────────────────────────────────
 
 function reportToService(
   severity: MonitoringSeverity,
   message: string,
   meta: Record<string, unknown>,
+  originalErr: unknown,
 ): void {
   const payload = {
     severity,
@@ -71,7 +73,7 @@ function reportToService(
     ...meta,
   };
 
-  // Structured console output — always present regardless of service
+  // Structured console output — always present
   if (severity === 'error' || severity === 'fatal') {
     console.error('[vanto-monitor]', payload);
   } else if (severity === 'warning') {
@@ -80,18 +82,41 @@ function reportToService(
     console.info('[vanto-monitor]', payload);
   }
 
-  // ── Sentry integration point ──────────────────────────────────
-  // When you add @sentry/nextjs, uncomment and replace below:
-  //
-  // import * as Sentry from '@sentry/nextjs';
-  // Sentry.withScope((scope) => {
-  //   scope.setTag('context', meta.context as string);
-  //   if (meta.userId) scope.setUser({ id: meta.userId as string });
-  //   if (meta.sessionId) scope.setTag('sessionId', meta.sessionId as string);
-  //   if (err instanceof Error) {
-  //     Sentry.captureException(err);
-  //   } else {
-  //     Sentry.captureMessage(message, severity === 'fatal' ? 'fatal' : severity as Sentry.SeverityLevel);
-  //   }
-  // });
+  // ── Sentry integration ────────────────────────────────────────
+  // Active only when NEXT_PUBLIC_SENTRY_DSN is set. The Sentry SDK
+  // is a no-op without an initialised DSN, so this is always safe to call.
+  try {
+    Sentry.withScope((scope) => {
+      scope.setTag('context', meta.context as string);
+      scope.setTag('app', 'vanto-coach');
+      scope.setLevel(
+        severity === 'fatal' ? 'fatal'
+        : severity === 'error' ? 'error'
+        : severity === 'warning' ? 'warning'
+        : 'info'
+      );
+
+      if (meta.userId) scope.setUser({ id: meta.userId as string });
+      if (meta.sessionId) scope.setTag('sessionId', meta.sessionId as string);
+      if (meta.route) scope.setTag('route', meta.route as string);
+
+      // Attach extra metadata (excluding userId/sessionId already set above)
+      const { userId: _u, sessionId: _s, route: _r, context: _c, stack: _st, ...extra } = meta;
+      if (Object.keys(extra).length) scope.setExtras(extra);
+
+      if (originalErr instanceof Error) {
+        Sentry.captureException(originalErr);
+      } else {
+        Sentry.captureMessage(
+          message,
+          severity === 'fatal' ? 'fatal'
+          : severity === 'error' ? 'error'
+          : severity === 'warning' ? 'warning'
+          : 'info',
+        );
+      }
+    });
+  } catch {
+    // Never let Sentry calls crash the application
+  }
 }

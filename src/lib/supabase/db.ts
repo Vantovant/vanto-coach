@@ -6,6 +6,7 @@
  */
 
 import { createClient } from './client';
+import { captureError, captureMessage } from '@/lib/monitoring';
 import type {
   CoachSession,
   CoachMemory,
@@ -32,7 +33,10 @@ export async function getSessions(): Promise<CoachSession[]> {
     .order('session_date', { ascending: false });
 
   if (error) {
-    console.error('[db] getSessions error:', error.message);
+    captureMessage(`getSessions failed: ${error.message}`, 'error', {
+      context: 'db:getSessions',
+      supabaseCode: error.code,
+    });
     return [];
   }
 
@@ -54,7 +58,16 @@ export async function getSessionById(id: string): Promise<CoachSession | null> {
     .is('deleted_at', null)
     .single();
 
-  if (error || !data) return null;
+  if (error || !data) {
+    if (error) {
+      captureMessage(`getSessionById failed: ${error.message}`, 'warning', {
+        context: 'db:getSessionById',
+        sessionId: id,
+        supabaseCode: error.code,
+      });
+    }
+    return null;
+  }
   return rowToSession(data);
 }
 
@@ -117,7 +130,9 @@ export async function createSession(input: CreateSessionInput): Promise<CoachSes
 
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) {
-    console.error('[db] createSession: no authenticated user');
+    captureMessage('createSession: no authenticated user', 'error', {
+      context: 'db:createSession',
+    });
     return null;
   }
 
@@ -143,7 +158,11 @@ export async function createSession(input: CreateSessionInput): Promise<CoachSes
     .single();
 
   if (sessionError || !session) {
-    console.error('[db] createSession insert error:', sessionError?.message);
+    captureMessage(`createSession insert failed: ${sessionError?.message ?? 'unknown'}`, 'error', {
+      context: 'db:createSession',
+      userId: user.id,
+      supabaseCode: sessionError?.code,
+    });
     return null;
   }
 
@@ -154,7 +173,13 @@ export async function createSession(input: CreateSessionInput): Promise<CoachSes
     const { error: entryError } = await supabase
       .from('coach_structured_entries')
       .insert({ session_id: sessionId, user_id: user.id, ...input.structured_entry });
-    if (entryError) console.error('[db] structured entry error:', entryError.message);
+    if (entryError) {
+      captureMessage(`structured entry insert failed: ${entryError.message}`, 'warning', {
+        context: 'db:createSession:structuredEntry',
+        sessionId,
+        supabaseCode: entryError.code,
+      });
+    }
   }
 
   // Insert action items
@@ -171,7 +196,13 @@ export async function createSession(input: CreateSessionInput): Promise<CoachSes
       dedupe_key: `${user.id}|${a.title.slice(0, 30)}|${session.session_date}`,
     }));
     const { error: actionsError } = await supabase.from('coach_action_items').insert(rows);
-    if (actionsError) console.error('[db] action items error:', actionsError.message);
+    if (actionsError) {
+      captureMessage(`action items insert failed: ${actionsError.message}`, 'warning', {
+        context: 'db:createSession:actionItems',
+        sessionId,
+        supabaseCode: actionsError.code,
+      });
+    }
   }
 
   // Insert scripture refs
@@ -182,7 +213,13 @@ export async function createSession(input: CreateSessionInput): Promise<CoachSes
       ...s,
     }));
     const { error: scriptureError } = await supabase.from('coach_scripture_refs').insert(rows);
-    if (scriptureError) console.error('[db] scripture refs error:', scriptureError.message);
+    if (scriptureError) {
+      captureMessage(`scripture refs insert failed: ${scriptureError.message}`, 'warning', {
+        context: 'db:createSession:scriptureRefs',
+        sessionId,
+        supabaseCode: scriptureError.code,
+      });
+    }
   }
 
   // Insert prayer points
@@ -194,7 +231,13 @@ export async function createSession(input: CreateSessionInput): Promise<CoachSes
       category: p.category,
     }));
     const { error: prayerError } = await supabase.from('coach_prayer_points').insert(rows);
-    if (prayerError) console.error('[db] prayer points error:', prayerError.message);
+    if (prayerError) {
+      captureMessage(`prayer points insert failed: ${prayerError.message}`, 'warning', {
+        context: 'db:createSession:prayerPoints',
+        sessionId,
+        supabaseCode: prayerError.code,
+      });
+    }
   }
 
   return getSessionById(sessionId);
@@ -206,7 +249,130 @@ export async function softDeleteSession(id: string): Promise<boolean> {
     .from('coach_sessions')
     .update({ deleted_at: new Date().toISOString() })
     .eq('id', id);
-  if (error) { console.error('[db] softDeleteSession error:', error.message); return false; }
+  if (error) {
+    captureMessage(`softDeleteSession failed: ${error.message}`, 'error', {
+      context: 'db:softDeleteSession',
+      sessionId: id,
+      supabaseCode: error.code,
+    });
+    return false;
+  }
+  return true;
+}
+
+/**
+ * Update AI-processed fields on an existing session after a successful retry.
+ * Only touches fields that the AI analysis populates — never overwrites audio/transcript.
+ */
+export async function updateSessionProcessing(
+  sessionId: string,
+  update: {
+    summary?: string;
+    mood?: string | null;
+    sentiment_score?: number | null;
+    life_areas?: string[];
+    spiritual_topics?: string[];
+    coach_response?: string | null;
+    action_status?: 'pending' | 'extracted' | 'applied' | 'none';
+    cleaned_transcript?: string;
+  },
+  relatedRows?: {
+    followups?: string[];
+    prayer_requests?: string[];
+  }
+): Promise<boolean> {
+  const supabase = createClient();
+
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) {
+    captureMessage('updateSessionProcessing: no authenticated user', 'error', {
+      context: 'db:updateSessionProcessing',
+      sessionId,
+    });
+    return false;
+  }
+
+  const { error: updateError } = await supabase
+    .from('coach_sessions')
+    .update({
+      ...update,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', sessionId)
+    .eq('user_id', user.id);
+
+  if (updateError) {
+    captureMessage(`updateSessionProcessing failed: ${updateError.message}`, 'error', {
+      context: 'db:updateSessionProcessing',
+      sessionId,
+      supabaseCode: updateError.code,
+    });
+    return false;
+  }
+
+  // Upsert structured entry if followups/prayer_requests are provided
+  if (relatedRows && (relatedRows.followups?.length || relatedRows.prayer_requests?.length)) {
+    // Check if structured entry already exists
+    const { data: existing } = await supabase
+      .from('coach_structured_entries')
+      .select('id')
+      .eq('session_id', sessionId)
+      .maybeSingle();
+
+    if (existing) {
+      await supabase
+        .from('coach_structured_entries')
+        .update({
+          followups: relatedRows.followups ?? [],
+          prayer_requests: relatedRows.prayer_requests ?? [],
+          updated_at: new Date().toISOString(),
+        })
+        .eq('session_id', sessionId);
+    } else {
+      await supabase
+        .from('coach_structured_entries')
+        .insert({
+          session_id: sessionId,
+          user_id: user.id,
+          wins: [], struggles: [], fears: [], decisions: [], people: [],
+          opportunities: [], gratitude: [],
+          followups: relatedRows.followups ?? [],
+          prayer_requests: relatedRows.prayer_requests ?? [],
+          scripture_reflections: [], habits: [], finances: [], health: [],
+          calling: [], relationships: [], leadership: [],
+        });
+    }
+
+    // Insert new action items from retry (de-duped by dedupe_key)
+    if (relatedRows.followups?.length) {
+      const rows = relatedRows.followups.map(title => ({
+        session_id: sessionId,
+        user_id: user.id,
+        title,
+        action_type: 'task',
+        priority: 'medium',
+        category: null,
+        source: 'coach_extract' as const,
+        status: 'pending' as const,
+        dedupe_key: `${user.id}|${title.slice(0, 30)}|retry`,
+      }));
+      await supabase
+        .from('coach_action_items')
+        .upsert(rows, { onConflict: 'dedupe_key', ignoreDuplicates: true });
+    }
+
+    // Insert new prayer points from retry
+    if (relatedRows.prayer_requests?.length) {
+      const rows = relatedRows.prayer_requests.map(content => ({
+        session_id: sessionId,
+        user_id: user.id,
+        content,
+        category: null,
+      }));
+      await supabase.from('coach_prayer_points').insert(rows);
+    }
+  }
+
   return true;
 }
 
@@ -236,7 +402,13 @@ export async function getPrayerPoints(status?: 'active' | 'answered' | 'continui
   if (status) query = query.eq('status', status);
 
   const { data, error } = await query;
-  if (error) { console.error('[db] getPrayerPoints error:', error.message); return []; }
+  if (error) {
+    captureMessage(`getPrayerPoints failed: ${error.message}`, 'warning', {
+      context: 'db:getPrayerPoints',
+      supabaseCode: error.code,
+    });
+    return [];
+  }
   return data ?? [];
 }
 
@@ -263,7 +435,12 @@ export interface UpsertMemoryInput {
 export async function upsertMemory(input: UpsertMemoryInput): Promise<CoachMemory | null> {
   const supabase = createClient();
   const { data: { user } } = await supabase.auth.getUser();
-  if (!user) { console.error('[db] upsertMemory: no authenticated user'); return null; }
+  if (!user) {
+    captureMessage('upsertMemory: no authenticated user', 'error', {
+      context: 'db:upsertMemory',
+    });
+    return null;
+  }
 
   const now = new Date().toISOString();
 
@@ -297,7 +474,14 @@ export async function upsertMemory(input: UpsertMemoryInput): Promise<CoachMemor
       .eq('id', existing.id)
       .select()
       .single();
-    if (error) { console.error('[db] upsertMemory update error:', error.message); return null; }
+    if (error) {
+      captureMessage(`upsertMemory update failed: ${error.message}`, 'warning', {
+        context: 'db:upsertMemory',
+        memoryType: input.memory_type,
+        supabaseCode: error.code,
+      });
+      return null;
+    }
     return data as CoachMemory;
   }
 
@@ -322,7 +506,14 @@ export async function upsertMemory(input: UpsertMemoryInput): Promise<CoachMemor
     })
     .select()
     .single();
-  if (error) { console.error('[db] upsertMemory insert error:', error.message); return null; }
+  if (error) {
+    captureMessage(`upsertMemory insert failed: ${error.message}`, 'warning', {
+      context: 'db:upsertMemory',
+      memoryType: input.memory_type,
+      supabaseCode: error.code,
+    });
+    return null;
+  }
   return data as CoachMemory;
 }
 
@@ -334,7 +525,13 @@ export async function getMemories(): Promise<CoachMemory[]> {
     .eq('is_archived', false)
     .order('last_seen_at', { ascending: false });
 
-  if (error) { console.error('[db] getMemories error:', error.message); return []; }
+  if (error) {
+    captureMessage(`getMemories failed: ${error.message}`, 'error', {
+      context: 'db:getMemories',
+      supabaseCode: error.code,
+    });
+    return [];
+  }
   return data ?? [];
 }
 
@@ -349,7 +546,13 @@ export async function getActionItems(): Promise<CoachActionItem[]> {
     .select('*')
     .order('created_at', { ascending: false });
 
-  if (error) { console.error('[db] getActionItems error:', error.message); return []; }
+  if (error) {
+    captureMessage(`getActionItems failed: ${error.message}`, 'error', {
+      context: 'db:getActionItems',
+      supabaseCode: error.code,
+    });
+    return [];
+  }
   return data ?? [];
 }
 
@@ -362,7 +565,14 @@ export async function updateActionItemStatus(
     .from('coach_action_items')
     .update({ status, updated_at: new Date().toISOString() })
     .eq('id', id);
-  if (error) { console.error('[db] updateActionItemStatus error:', error.message); return false; }
+  if (error) {
+    captureMessage(`updateActionItemStatus failed: ${error.message}`, 'error', {
+      context: 'db:updateActionItemStatus',
+      actionItemId: id,
+      supabaseCode: error.code,
+    });
+    return false;
+  }
   return true;
 }
 
@@ -395,7 +605,14 @@ export async function upsertSettings(settings: Partial<CoachSettings>): Promise<
     .update({ settings: { ...settings, user_id: user.id, updated_at: new Date().toISOString() } })
     .eq('id', user.id);
 
-  if (error) { console.error('[db] upsertSettings error:', error.message); return false; }
+  if (error) {
+    captureMessage(`upsertSettings failed: ${error.message}`, 'error', {
+      context: 'db:upsertSettings',
+      userId: user.id,
+      supabaseCode: error.code,
+    });
+    return false;
+  }
   return true;
 }
 

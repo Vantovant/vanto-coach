@@ -54,7 +54,7 @@ import {
 } from '@/components/ui/dialog';
 import type { CoachSession, CoachMemory, SessionMood, LifeArea } from '@/types/coach';
 import { useSessions } from '@/hooks/useSessions';
-import { createSession, softDeleteSession, upsertMemory } from '@/lib/supabase/db';
+import { createSession, softDeleteSession, upsertMemory, updateSessionProcessing } from '@/lib/supabase/db';
 import { uploadAudio } from '@/lib/supabase/storage';
 import { cn } from '@/lib/utils';
 import { VoiceRecorder, type ExtendedRecordingResult } from '@/components/diary/VoiceRecorder';
@@ -72,6 +72,17 @@ export function DiaryTab() {
 
   const allSessions = sessions;
 
+  /** Optimistically update a session already in the list (e.g. after retry). */
+  const updateSession = React.useCallback((updated: CoachSession) => {
+    // Update the list
+    // (useSessions doesn't expose a direct setter, so we splice via remove+prepend
+    // only when the ID already exists — cheaper than a full refresh)
+    removeSession(updated.id);
+    prependSession(updated);
+    // Keep the detail panel in sync
+    setSelectedSession(prev => prev?.id === updated.id ? updated : prev);
+  }, [removeSession, prependSession]);
+
   const handleRecordingComplete = React.useCallback(async (result: ExtendedRecordingResult | null) => {
     if (result) {
       const hasTranscript = !!(result.transcript && result.transcript.trim().length > 0);
@@ -86,10 +97,12 @@ export function DiaryTab() {
           if (storagePath) {
             storedAudioUrl = storagePath; // store the path; signed URL is generated at play time
           } else {
-            console.warn('[diary] audio upload returned null — keeping blob URL for this session');
+            captureMessage('Audio upload returned null — keeping blob URL', 'warning', {
+              context: 'diary:audioUpload',
+            });
           }
         } catch (uploadErr) {
-          console.error('[diary] audio upload threw:', uploadErr);
+          captureError(uploadErr, { context: 'diary:audioUpload' });
           // Non-fatal: keep blob URL
         }
       }
@@ -206,6 +219,9 @@ export function DiaryTab() {
     setShowRecorder(false);
   }, [prependSession]);
 
+  /** Client-side hard stop for retry requests — mirrors useTranscriptProcessor. */
+  const RETRY_TIMEOUT_MS = 45_000;
+
   const handleRetryProcessing = React.useCallback(async (session: CoachSession) => {
     const transcript = session.cleaned_transcript || session.raw_transcript;
     if (!transcript) {
@@ -224,21 +240,47 @@ export function DiaryTab() {
       sessionId: session.id,
     });
 
-    try {
-      const response = await fetch('/api/ai/process-transcript', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          transcript,
-          options: {
-            generateSummary: true,
-            extractActions: true,
-            extractPrayers: true,
-            detectMood: true,
-            cleanTranscript: true,
-          },
-        }),
+    // Hard client-side timeout — prevents the retry from hanging forever
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => {
+      controller.abort();
+      captureMessage('Retry processing timed out on client', 'warning', {
+        context: 'diary:retry',
+        sessionId: session.id,
+        timeoutMs: RETRY_TIMEOUT_MS,
       });
+    }, RETRY_TIMEOUT_MS);
+
+    try {
+      let response: Response;
+      try {
+        response = await fetch('/api/ai/process-transcript', {
+          method: 'POST',
+          signal: controller.signal,
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            transcript,
+            options: {
+              generateSummary: true,
+              extractActions: true,
+              extractPrayers: true,
+              detectMood: true,
+              cleanTranscript: true,
+            },
+          }),
+        });
+      } catch (fetchErr) {
+        clearTimeout(timeoutId);
+        if (fetchErr instanceof Error && fetchErr.name === 'AbortError') {
+          toast.error('Retry timed out', {
+            id: retryToastId,
+            description: 'Analysis is taking too long. Please try again.',
+          });
+          return;
+        }
+        throw fetchErr;
+      }
+      clearTimeout(timeoutId);
 
       if (!response.ok) throw new Error(`API returned ${response.status}`);
 
@@ -247,9 +289,75 @@ export function DiaryTab() {
         throw new Error(apiResponse.error || 'Processing failed');
       }
 
+      const d = apiResponse.data;
+
+      // Map topics → life areas (same logic as initial save)
+      const lifeAreas: LifeArea[] = (d.keyTopics || [])
+        .map((t: string) => t.toLowerCase() as LifeArea)
+        .filter((area: string) => [
+          'faith', 'family', 'marriage', 'parenting', 'health', 'fitness',
+          'business', 'career', 'finances', 'relationships', 'ministry',
+          'leadership', 'personal_growth', 'rest', 'calling'
+        ].includes(area))
+        .slice(0, 5);
+
+      // Persist AI results back to the existing session row
+      if (!session.id.startsWith('session-local-')) {
+        const persisted = await updateSessionProcessing(
+          session.id,
+          {
+            summary: d.summary || session.summary || undefined,
+            mood: d.mood || null,
+            sentiment_score: d.mood ? getMoodSentiment(d.mood) : null,
+            life_areas: lifeAreas.length ? lifeAreas : session.life_areas,
+            spiritual_topics: d.prayerPoints?.length ? ['prayer'] : session.spiritual_topics,
+            coach_response: 'AI analysis complete. Review your insights below.',
+            action_status: d.actionItems?.length ? 'extracted' : 'pending',
+            cleaned_transcript: d.cleanedTranscript || session.cleaned_transcript || undefined,
+          },
+          {
+            followups: d.actionItems || [],
+            prayer_requests: d.prayerPoints || [],
+          }
+        );
+
+        if (!persisted) {
+          captureMessage('updateSessionProcessing returned false after retry', 'warning', {
+            context: 'diary:retry',
+            sessionId: session.id,
+          });
+        }
+      }
+
+      // Optimistically update local state so UI reflects new data without full reload
+      const updatedSession: CoachSession = {
+        ...session,
+        summary: d.summary || session.summary || '',
+        mood: (d.mood as SessionMood) || session.mood,
+        sentiment_score: d.mood ? getMoodSentiment(d.mood) : session.sentiment_score,
+        life_areas: lifeAreas.length ? lifeAreas : session.life_areas,
+        spiritual_topics: d.prayerPoints?.length ? ['prayer'] : session.spiritual_topics,
+        coach_response: 'AI analysis complete. Review your insights below.',
+        action_status: d.actionItems?.length ? 'extracted' : 'pending',
+        cleaned_transcript: d.cleanedTranscript || session.cleaned_transcript,
+        structured_entry: {
+          ...(session.structured_entry ?? {
+            wins: [], struggles: [], fears: [], decisions: [], people: [],
+            opportunities: [], gratitude: [], scripture_reflections: [],
+            habits: [], finances: [], health: [], calling: [], relationships: [], leadership: [],
+          }),
+          followups: d.actionItems || [],
+          prayer_requests: d.prayerPoints || [],
+        },
+        updated_at: new Date().toISOString(),
+      };
+      updateSession(updatedSession);
+
       toast.success('Analysis complete', {
         id: retryToastId,
-        description: 'Insights extracted. Refresh to see the updated entry.',
+        description: apiResponse.fallbackUsed
+          ? 'Insights extracted using local analysis.'
+          : 'AI insights extracted and saved.',
       });
 
       captureMessage('Retry processing succeeded', 'info', {
@@ -258,13 +366,14 @@ export function DiaryTab() {
         method: apiResponse.fallbackUsed ? 'fallback' : 'openai',
       });
     } catch (retryErr) {
+      clearTimeout(timeoutId);
       captureError(retryErr, { context: 'diary:retry', sessionId: session.id });
       toast.error('Retry failed', {
         id: retryToastId,
         description: 'Analysis could not be completed. Please try again later.',
       });
     }
-  }, []);
+  }, [updateSession]);
 
   const handleDelete = React.useCallback(async (id: string) => {
     // Optimistically remove from list and close detail panel immediately

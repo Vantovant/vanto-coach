@@ -96,7 +96,9 @@ function getContextVerse(
     (s.life_areas ?? []).forEach(a => signals.push(a));
     (s.spiritual_topics ?? []).forEach(t => signals.push(t));
   }
-  if (actionItems.length >= 3) signals.push('business', 'planning');
+  // Only add prayer signal if user has active prayer points — do NOT inject
+  // generic business/planning signals from action item counts, as that causes
+  // Matthew 6:33 to win every time any user has 3+ actions.
   if (prayerPoints.length > 0) signals.push('prayer');
 
   if (signals.length === 0) {

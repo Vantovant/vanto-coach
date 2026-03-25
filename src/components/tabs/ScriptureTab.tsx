@@ -54,8 +54,9 @@ import {
   CommandItem,
   CommandList,
 } from '@/components/ui/command';
-import { bibleBooks, sampleBibleChapter, topicalScriptures } from '@/data/mock-data';
+import { bibleBooks, topicalScriptures } from '@/data/mock-data';
 import type { BibleBook, BibleVerse, ScriptureReference } from '@/types/coach';
+import { useBibleVerse } from '@/hooks/useBibleVerse';
 import { cn } from '@/lib/utils';
 import { getScriptureParamsFromUrl, type ScriptureNavigation } from '@/lib/bible/navigation';
 import { RelatedVersesStudy } from '@/components/bible/RelatedVersesStudy';
@@ -78,9 +79,14 @@ export function ScriptureTab() {
   const [activeTab, setActiveTab] = React.useState<'read' | 'topics' | 'saved' | 'history'>('read');
   const [showBookSelector, setShowBookSelector] = React.useState(false);
   const [selectedVerse, setSelectedVerse] = React.useState<BibleVerse | null>(null);
-  const [savedVerses, setSavedVerses] = React.useState<Set<string>>(new Set(['Proverbs-3-5']));
+  // savedVerses stores verse key → full verse data so Saved tab can render text without re-fetching
+  const [savedVerses, setSavedVerses] = React.useState<Map<string, BibleVerse>>(new Map());
   const [searchQuery, setSearchQuery] = React.useState('');
   const [studyReference, setStudyReference] = React.useState<string | null>(null);
+
+  // Fetch the currently selected chapter from the live Bible API
+  const chapterRef = `${selectedBook} ${selectedChapter}`;
+  const { passage: chapterPassage, isLoading: chapterLoading } = useBibleVerse(chapterRef);
 
   // Handle URL navigation parameters
   React.useEffect(() => {
@@ -132,11 +138,11 @@ export function ScriptureTab() {
 
   const toggleSaveVerse = (verse: BibleVerse) => {
     const key = `${verse.book}-${verse.chapter}-${verse.verse}`;
-    const newSaved = new Set(savedVerses);
+    const newSaved = new Map(savedVerses);
     if (newSaved.has(key)) {
       newSaved.delete(key);
     } else {
-      newSaved.add(key);
+      newSaved.set(key, verse);
     }
     setSavedVerses(newSaved);
   };
@@ -285,21 +291,30 @@ export function ScriptureTab() {
               </div>
             </div>
 
-            {/* Chapter Content */}
+            {/* Chapter Content — live from bible-api.com */}
             <Card className="card-elevated">
               <CardHeader className="pb-4">
                 <div className="flex items-center justify-between">
                   <div>
                     <CardTitle className="text-xl">
-                      {sampleBibleChapter.book} {sampleBibleChapter.chapter}
+                      {selectedBook} {selectedChapter}
                     </CardTitle>
                     <CardDescription>King James Version</CardDescription>
                   </div>
                   <div className="flex items-center gap-2">
-                    <Button variant="ghost" size="icon">
+                    <Button variant="ghost" size="icon" onClick={() => toast.info('Audio coming soon')}>
                       <Volume2 className="h-4 w-4" />
                     </Button>
-                    <Button variant="ghost" size="icon">
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      onClick={() => {
+                        if (typeof window !== 'undefined') {
+                          navigator.clipboard.writeText(`${selectedBook} ${selectedChapter} — ${window.location.href}`);
+                          toast.success('Link copied');
+                        }
+                      }}
+                    >
                       <Share2 className="h-4 w-4" />
                     </Button>
                   </div>
@@ -307,64 +322,78 @@ export function ScriptureTab() {
               </CardHeader>
               <CardContent>
                 <ScrollArea className="h-[calc(100vh-450px)]">
-                  <div className="space-y-4 pr-4">
-                    {sampleBibleChapter.verses.map((verse) => (
-                      <div
-                        key={verse.verse}
-                        id={`verse-${verse.verse}`}
-                        className={cn(
-                          'group relative p-3 -mx-3 rounded-lg transition-all cursor-pointer',
-                          selectedVerse?.verse === verse.verse && 'bg-[hsl(var(--scripture))]/50',
-                          isVerseSaved(verse) && 'border-l-2 border-accent',
-                          highlightedVerse === verse.verse && 'bg-accent/20 ring-2 ring-accent/50 shadow-md animate-pulse'
-                        )}
-                        onClick={() => setSelectedVerse(verse)}
-                      >
-                        <span className={cn(
-                          'text-xs font-semibold mr-2 transition-colors',
-                          highlightedVerse === verse.verse ? 'text-accent' : 'text-muted-foreground'
-                        )}>
-                          {verse.verse}
-                        </span>
-                        <span className="text-base leading-relaxed">
-                          {verse.text}
-                        </span>
+                  {chapterLoading && (
+                    <div className="flex items-center justify-center py-16 text-muted-foreground text-sm gap-2">
+                      <BookMarked className="h-4 w-4 animate-pulse" />
+                      Loading {selectedBook} {selectedChapter}…
+                    </div>
+                  )}
+                  {!chapterLoading && !chapterPassage && (
+                    <div className="py-16 text-center text-muted-foreground text-sm">
+                      Could not load chapter. Check your connection and try again.
+                    </div>
+                  )}
+                  {!chapterLoading && chapterPassage && (
+                    <div className="space-y-4 pr-4">
+                      {chapterPassage.verses.map((verse) => (
+                        <div
+                          key={verse.verse}
+                          id={`verse-${verse.verse}`}
+                          className={cn(
+                            'group relative p-3 -mx-3 rounded-lg transition-all cursor-pointer',
+                            selectedVerse?.verse === verse.verse && 'bg-[hsl(var(--scripture))]/50',
+                            isVerseSaved(verse) && 'border-l-2 border-accent',
+                            highlightedVerse === verse.verse && 'bg-accent/20 ring-2 ring-accent/50 shadow-md animate-pulse'
+                          )}
+                          onClick={() => setSelectedVerse(verse)}
+                        >
+                          <span className={cn(
+                            'text-xs font-semibold mr-2 transition-colors',
+                            highlightedVerse === verse.verse ? 'text-accent' : 'text-muted-foreground'
+                          )}>
+                            {verse.verse}
+                          </span>
+                          <span className="text-base leading-relaxed">
+                            {verse.text}
+                          </span>
 
-                        {/* Verse Actions (visible on hover) */}
-                        <div className={cn(
-                          'absolute right-2 top-2 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity',
-                          selectedVerse?.verse === verse.verse && 'opacity-100'
-                        )}>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="h-7 w-7"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              toggleSaveVerse(verse);
-                            }}
-                          >
-                            {isVerseSaved(verse) ? (
-                              <BookmarkCheck className="h-4 w-4 text-accent" />
-                            ) : (
-                              <Bookmark className="h-4 w-4" />
-                            )}
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="h-7 w-7"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              navigator.clipboard.writeText(`${verse.book} ${verse.chapter}:${verse.verse} - ${verse.text}`);
-                            }}
-                          >
-                            <Copy className="h-4 w-4" />
-                          </Button>
+                          {/* Verse Actions (visible on hover) */}
+                          <div className={cn(
+                            'absolute right-2 top-2 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity',
+                            selectedVerse?.verse === verse.verse && 'opacity-100'
+                          )}>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-7 w-7"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                toggleSaveVerse(verse);
+                              }}
+                            >
+                              {isVerseSaved(verse) ? (
+                                <BookmarkCheck className="h-4 w-4 text-accent" />
+                              ) : (
+                                <Bookmark className="h-4 w-4" />
+                              )}
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-7 w-7"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                navigator.clipboard.writeText(`${verse.book} ${verse.chapter}:${verse.verse} - ${verse.text}`);
+                                toast.success('Copied to clipboard');
+                              }}
+                            >
+                              <Copy className="h-4 w-4" />
+                            </Button>
+                          </div>
                         </div>
-                      </div>
-                    ))}
-                  </div>
+                      ))}
+                    </div>
+                  )}
                 </ScrollArea>
               </CardContent>
             </Card>
@@ -490,27 +519,33 @@ export function ScriptureTab() {
             </div>
 
             <div className="space-y-3">
-              {Array.from(savedVerses).map((key) => {
-                const [book, chapter, verse] = key.split('-');
-                const verseData = sampleBibleChapter.verses.find(
-                  v => v.book === book && v.chapter === parseInt(chapter) && v.verse === parseInt(verse)
-                );
-                if (!verseData) return null;
-
+              {Array.from(savedVerses.entries()).map(([key, verseData]) => {
                 return (
-                  <Card key={key} className="card-premium">
+                  <Card
+                    key={key}
+                    className="card-premium cursor-pointer hover:shadow-md transition-shadow"
+                    onClick={() => {
+                      setSelectedBook(verseData.book);
+                      setSelectedChapter(verseData.chapter);
+                      setHighlightedVerse(verseData.verse);
+                      setActiveTab('read');
+                    }}
+                  >
                     <CardContent className="p-4">
                       <div className="flex items-start justify-between gap-4">
                         <div>
                           <Badge variant="secondary" className="mb-2">
-                            {book} {chapter}:{verse}
+                            {verseData.book} {verseData.chapter}:{verseData.verse}
                           </Badge>
                           <p className="text-sm italic">"{verseData.text}"</p>
                         </div>
                         <Button
                           variant="ghost"
                           size="icon"
-                          onClick={() => toggleSaveVerse(verseData)}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            toggleSaveVerse(verseData);
+                          }}
                         >
                           <BookmarkCheck className="h-4 w-4 text-accent" />
                         </Button>

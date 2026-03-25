@@ -9,17 +9,10 @@ import {
   Shield,
   Bell,
   Download,
-  Upload,
   Trash2,
   Info,
-  ChevronRight,
   Sparkles,
   Heart,
-  Moon,
-  Sun,
-  Monitor,
-  Volume2,
-  Globe,
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -47,8 +40,10 @@ import {
   AlertDialogTrigger,
 } from '@/components/ui/alert-dialog';
 import type { CoachSettings, CoachingTone, BibleTranslation } from '@/types/coach';
-import { getSettings, upsertSettings } from '@/lib/supabase/db';
+import { getSettings, upsertSettings, getSessions, getMemories, getActionItems } from '@/lib/supabase/db';
 import { useAuth } from '@/context/AuthContext';
+import { toast } from 'sonner';
+import { captureError } from '@/lib/monitoring';
 
 const DEFAULT_SETTINGS: CoachSettings = {
   user_id: '',
@@ -68,6 +63,7 @@ export function SettingsTab() {
   const { user } = useAuth();
   const [settings, setSettings] = React.useState<CoachSettings>(DEFAULT_SETTINGS);
   const [saving, setSaving] = React.useState(false);
+  const [exporting, setExporting] = React.useState(false);
 
   React.useEffect(() => {
     if (!user) return;
@@ -81,7 +77,87 @@ export function SettingsTab() {
     const updated = { ...settings, [key]: value };
     setSettings(updated);
     setSaving(true);
-    upsertSettings(updated).finally(() => setSaving(false));
+    upsertSettings(updated).then(ok => {
+      setSaving(false);
+      if (!ok) toast.error('Failed to save setting', { description: 'Please try again.' });
+    });
+  };
+
+  // ── Real export ──────────────────────────────────────────────────────────
+
+  const handleExport = async () => {
+    if (!user) {
+      toast.error('Not signed in');
+      return;
+    }
+    setExporting(true);
+    const toastId = toast.loading('Preparing export…');
+    try {
+      const [sessions, memories, actionItems] = await Promise.all([
+        getSessions(),
+        getMemories(),
+        getActionItems(),
+      ]);
+
+      const exportPayload = {
+        exportedAt: new Date().toISOString(),
+        userId: user.id,
+        sessions: sessions.map(s => ({
+          id: s.id,
+          title: s.title,
+          session_date: s.session_date,
+          summary: s.summary,
+          mood: s.mood,
+          life_areas: s.life_areas,
+          raw_transcript: s.raw_transcript,
+          cleaned_transcript: s.cleaned_transcript,
+          action_status: s.action_status,
+          created_at: s.created_at,
+        })),
+        memories: memories.map(m => ({
+          id: m.id,
+          memory_type: m.memory_type,
+          title: m.title,
+          summary: m.summary,
+          confidence: m.confidence,
+          occurrence_count: m.occurrence_count,
+          is_pinned: m.is_pinned,
+          first_seen_at: m.first_seen_at,
+          last_seen_at: m.last_seen_at,
+        })),
+        actionItems: actionItems.map(a => ({
+          id: a.id,
+          title: a.title,
+          action_type: a.action_type,
+          priority: a.priority,
+          status: a.status,
+          category: a.category,
+          due_date: a.due_date,
+          created_at: a.created_at,
+        })),
+      };
+
+      const blob = new Blob([JSON.stringify(exportPayload, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `vanto-coach-export-${new Date().toISOString().split('T')[0]}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+
+      toast.success('Export ready', {
+        id: toastId,
+        description: `${sessions.length} entries, ${memories.length} memories, ${actionItems.length} actions exported.`,
+      });
+    } catch (err) {
+      captureError(err, { context: 'settings:export', userId: user.id });
+      toast.error('Export failed', {
+        id: toastId,
+        description: 'Could not prepare your data. Please try again.',
+      });
+    } finally {
+      setExporting(false);
+    }
   };
 
   return (
@@ -112,25 +188,19 @@ export function SettingsTab() {
               <Sparkles className="h-5 w-5 text-[hsl(var(--spiritual))]" />
               <CardTitle className="text-base">Coaching Preferences</CardTitle>
             </div>
-            <CardDescription>
-              Adjust how your AI coach interacts with you.
-            </CardDescription>
+            <CardDescription>Adjust how your AI coach interacts with you.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-6">
             <div className="flex items-center justify-between">
               <div className="space-y-1">
                 <Label>Coaching Tone</Label>
-                <p className="text-sm text-muted-foreground">
-                  How direct should coaching feedback be?
-                </p>
+                <p className="text-sm text-muted-foreground">How direct should coaching feedback be?</p>
               </div>
               <Select
                 value={settings.coaching_tone}
                 onValueChange={(v) => updateSetting('coaching_tone', v as CoachingTone)}
               >
-                <SelectTrigger className="w-40">
-                  <SelectValue />
-                </SelectTrigger>
+                <SelectTrigger className="w-40"><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="gentle">Gentle</SelectItem>
                   <SelectItem value="balanced">Balanced</SelectItem>
@@ -145,9 +215,7 @@ export function SettingsTab() {
             <div className="flex items-center justify-between">
               <div className="space-y-1">
                 <Label>Pastoral Mode</Label>
-                <p className="text-sm text-muted-foreground">
-                  Include pastoral care language and deeper spiritual support.
-                </p>
+                <p className="text-sm text-muted-foreground">Include pastoral care language and deeper spiritual support.</p>
               </div>
               <Switch
                 checked={settings.pastoral_mode}
@@ -158,9 +226,7 @@ export function SettingsTab() {
             <div className="flex items-center justify-between">
               <div className="space-y-1">
                 <Label>Pentecostal/Charismatic Guidance</Label>
-                <p className="text-sm text-muted-foreground">
-                  Include Spirit-led language, faith declarations, and charismatic perspective.
-                </p>
+                <p className="text-sm text-muted-foreground">Include Spirit-led language, faith declarations, and charismatic perspective.</p>
               </div>
               <Switch
                 checked={settings.pentecostal_guidance}
@@ -171,9 +237,7 @@ export function SettingsTab() {
             <div className="flex items-center justify-between">
               <div className="space-y-1">
                 <Label>Auto-Extract Actions</Label>
-                <p className="text-sm text-muted-foreground">
-                  Automatically extract tasks and reminders from journal entries.
-                </p>
+                <p className="text-sm text-muted-foreground">Automatically extract tasks and reminders from journal entries.</p>
               </div>
               <Switch
                 checked={settings.auto_extract_actions}
@@ -190,25 +254,19 @@ export function SettingsTab() {
               <BookMarked className="h-5 w-5 text-accent" />
               <CardTitle className="text-base">Scripture Settings</CardTitle>
             </div>
-            <CardDescription>
-              Customize your Bible reading experience.
-            </CardDescription>
+            <CardDescription>Customize your Bible reading experience.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-6">
             <div className="flex items-center justify-between">
               <div className="space-y-1">
                 <Label>Bible Translation</Label>
-                <p className="text-sm text-muted-foreground">
-                  Default translation for scripture references.
-                </p>
+                <p className="text-sm text-muted-foreground">Default translation for scripture references.</p>
               </div>
               <Select
                 value={settings.scripture_translation}
                 onValueChange={(v) => updateSetting('scripture_translation', v as BibleTranslation)}
               >
-                <SelectTrigger className="w-40">
-                  <SelectValue />
-                </SelectTrigger>
+                <SelectTrigger className="w-40"><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="KJV">KJV</SelectItem>
                   <SelectItem value="NKJV">NKJV</SelectItem>
@@ -229,25 +287,19 @@ export function SettingsTab() {
               <Mic className="h-5 w-5 text-primary" />
               <CardTitle className="text-base">Voice & Transcription</CardTitle>
             </div>
-            <CardDescription>
-              Configure voice recording and speech-to-text settings.
-            </CardDescription>
+            <CardDescription>Configure voice recording and speech-to-text settings.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-6">
             <div className="flex items-center justify-between">
               <div className="space-y-1">
                 <Label>Transcription Language</Label>
-                <p className="text-sm text-muted-foreground">
-                  Primary language for speech recognition.
-                </p>
+                <p className="text-sm text-muted-foreground">Primary language for speech recognition.</p>
               </div>
               <Select
                 value={settings.transcription_language}
                 onValueChange={(v) => updateSetting('transcription_language', v)}
               >
-                <SelectTrigger className="w-40">
-                  <SelectValue />
-                </SelectTrigger>
+                <SelectTrigger className="w-40"><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="en-US">English (US)</SelectItem>
                   <SelectItem value="en-GB">English (UK)</SelectItem>
@@ -266,9 +318,7 @@ export function SettingsTab() {
               <Brain className="h-5 w-5 text-[hsl(var(--spiritual))]" />
               <CardTitle className="text-base">Memory & Privacy</CardTitle>
             </div>
-            <CardDescription>
-              Control how your data is stored and used.
-            </CardDescription>
+            <CardDescription>Control how your data is stored and used.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-6">
             <div className="space-y-4">
@@ -314,25 +364,19 @@ export function SettingsTab() {
               <Bell className="h-5 w-5 text-warning" />
               <CardTitle className="text-base">Notifications</CardTitle>
             </div>
-            <CardDescription>
-              Configure alerts and reminders.
-            </CardDescription>
+            <CardDescription>Configure alerts and reminders.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-6">
             <div className="flex items-center justify-between">
               <div className="space-y-1">
                 <Label>Daily Briefing Time</Label>
-                <p className="text-sm text-muted-foreground">
-                  When to receive your morning coaching briefing.
-                </p>
+                <p className="text-sm text-muted-foreground">When to receive your morning coaching briefing.</p>
               </div>
               <Select
                 value={settings.daily_briefing_time || 'none'}
                 onValueChange={(v) => updateSetting('daily_briefing_time', v === 'none' ? null : v)}
               >
-                <SelectTrigger className="w-40">
-                  <SelectValue placeholder="Select time" />
-                </SelectTrigger>
+                <SelectTrigger className="w-40"><SelectValue placeholder="Select time" /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="none">Disabled</SelectItem>
                   <SelectItem value="05:00">5:00 AM</SelectItem>
@@ -346,9 +390,7 @@ export function SettingsTab() {
             <div className="flex items-center justify-between">
               <div className="space-y-1">
                 <Label>Prayer Reminders</Label>
-                <p className="text-sm text-muted-foreground">
-                  Gentle reminders for prayer times.
-                </p>
+                <p className="text-sm text-muted-foreground">Gentle reminders for prayer times.</p>
               </div>
               <Switch
                 checked={settings.prayer_reminder_enabled}
@@ -365,24 +407,37 @@ export function SettingsTab() {
               <Download className="h-5 w-5 text-primary" />
               <CardTitle className="text-base">Data Management</CardTitle>
             </div>
-            <CardDescription>
-              Export or manage your data.
-            </CardDescription>
+            <CardDescription>Export or manage your data.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="flex flex-wrap gap-2">
-              <Button variant="outline" className="gap-2">
+              {/* Real export */}
+              <Button
+                variant="outline"
+                className="gap-2"
+                onClick={handleExport}
+                disabled={exporting}
+              >
                 <Download className="h-4 w-4" />
-                Export All Data
+                {exporting ? 'Exporting…' : 'Export All Data'}
               </Button>
-              <Button variant="outline" className="gap-2">
-                <Upload className="h-4 w-4" />
+
+              {/* Import — coming soon */}
+              <Button
+                variant="outline"
+                className="gap-2 opacity-50 cursor-not-allowed"
+                disabled
+                title="Import is not yet available"
+              >
+                <Info className="h-4 w-4" />
                 Import Data
+                <Badge variant="secondary" className="text-[10px] ml-1">Soon</Badge>
               </Button>
             </div>
 
             <Separator />
 
+            {/* Delete All — dialog confirms but action is informational until API endpoint exists */}
             <AlertDialog>
               <AlertDialogTrigger asChild>
                 <Button variant="destructive" className="gap-2">
@@ -394,14 +449,20 @@ export function SettingsTab() {
                 <AlertDialogHeader>
                   <AlertDialogTitle>Are you absolutely sure?</AlertDialogTitle>
                   <AlertDialogDescription>
-                    This action cannot be undone. This will permanently delete all your
-                    journal entries, audio recordings, memories, and coaching data.
+                    This action cannot be undone. This will permanently delete all your journal entries,
+                    audio recordings, memories, and coaching data. To proceed, please contact support
+                    or delete your account directly from the Supabase dashboard.
                   </AlertDialogDescription>
                 </AlertDialogHeader>
                 <AlertDialogFooter>
                   <AlertDialogCancel>Cancel</AlertDialogCancel>
-                  <AlertDialogAction className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
-                    Delete Everything
+                  <AlertDialogAction
+                    className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                    onClick={() => toast.info('Please contact support to delete all data.', {
+                      description: 'Bulk deletion requires manual verification to protect your account.',
+                    })}
+                  >
+                    I understand — contact support
                   </AlertDialogAction>
                 </AlertDialogFooter>
               </AlertDialogContent>
@@ -416,12 +477,10 @@ export function SettingsTab() {
               <Sparkles className="h-5 w-5 text-primary" />
               <CardTitle className="text-base">VantoOS Integration</CardTitle>
             </div>
-            <CardDescription>
-              Connect with VantoOS Plan for task synchronization.
-            </CardDescription>
+            <CardDescription>Connect with VantoOS Plan for task synchronization.</CardDescription>
           </CardHeader>
           <CardContent>
-            <div className="flex items-center justify-between p-4 rounded-lg bg-primary/5">
+            <div className="flex items-center justify-between p-4 rounded-lg bg-muted/50">
               <div className="flex items-center gap-3">
                 <div className="h-10 w-10 rounded-full bg-primary/10 flex items-center justify-center">
                   <Sparkles className="h-5 w-5 text-primary" />
@@ -431,8 +490,8 @@ export function SettingsTab() {
                   <p className="text-sm text-muted-foreground">Tasks, reminders, and meetings sync</p>
                 </div>
               </div>
-              <Badge variant="secondary" className="bg-success/20 text-success">
-                Connected
+              <Badge variant="secondary" className="bg-warning/20 text-warning">
+                Coming Soon
               </Badge>
             </div>
           </CardContent>
@@ -443,12 +502,8 @@ export function SettingsTab() {
           <CardContent className="p-6 text-center">
             <Sparkles className="h-10 w-10 mx-auto text-primary mb-4" />
             <h3 className="font-semibold mb-1">Vanto Coach</h3>
-            <p className="text-sm text-muted-foreground mb-4">
-              Executive Christian Life Coach
-            </p>
-            <p className="text-xs text-muted-foreground">
-              Version 1.0.0 • Powered by VantoOS
-            </p>
+            <p className="text-sm text-muted-foreground mb-4">Executive Christian Life Coach</p>
+            <p className="text-xs text-muted-foreground">Version 1.0.0 • Powered by VantoOS</p>
             <Separator className="my-4" />
             <p className="text-xs text-muted-foreground">
               This is coaching and spiritual guidance, not emergency or medical care.

@@ -535,6 +535,62 @@ export async function getMemories(): Promise<CoachMemory[]> {
   return data ?? [];
 }
 
+export async function getArchivedMemories(): Promise<CoachMemory[]> {
+  const supabase = createClient();
+  const { data, error } = await supabase
+    .from('coach_memories')
+    .select('*')
+    .eq('is_archived', true)
+    .order('last_seen_at', { ascending: false });
+
+  if (error) {
+    captureMessage(`getArchivedMemories failed: ${error.message}`, 'error', {
+      context: 'db:getArchivedMemories',
+      supabaseCode: error.code,
+    });
+    return [];
+  }
+  return data ?? [];
+}
+
+/**
+ * Patch is_pinned or is_archived on a memory row.
+ * Returns the updated row on success, null on failure.
+ */
+export async function patchMemory(
+  id: string,
+  patch: { is_pinned?: boolean; is_archived?: boolean }
+): Promise<CoachMemory | null> {
+  const supabase = createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) {
+    captureMessage('patchMemory: no authenticated user', 'error', {
+      context: 'db:patchMemory',
+      memoryId: id,
+    });
+    return null;
+  }
+
+  const { data, error } = await supabase
+    .from('coach_memories')
+    .update({ ...patch, updated_at: new Date().toISOString() })
+    .eq('id', id)
+    .eq('user_id', user.id)
+    .select()
+    .single();
+
+  if (error || !data) {
+    captureMessage(`patchMemory failed: ${error?.message ?? 'no data'}`, 'error', {
+      context: 'db:patchMemory',
+      memoryId: id,
+      patch: JSON.stringify(patch),
+      supabaseCode: error?.code,
+    });
+    return null;
+  }
+  return data as CoachMemory;
+}
+
 // ─────────────────────────────────────────────
 // ACTION ITEMS
 // ─────────────────────────────────────────────
@@ -574,6 +630,22 @@ export async function updateActionItemStatus(
     return false;
   }
   return true;
+}
+
+/**
+ * Bulk-update a set of action item IDs to a new status.
+ * Returns the count of successful updates.
+ */
+export async function bulkUpdateActionItemStatus(
+  ids: string[],
+  status: 'pending' | 'approved' | 'rejected' | 'synced'
+): Promise<{ succeeded: number; failed: number }> {
+  const results = await Promise.allSettled(
+    ids.map(id => updateActionItemStatus(id, status))
+  );
+  const succeeded = results.filter(r => r.status === 'fulfilled' && r.value).length;
+  const failed = ids.length - succeeded;
+  return { succeeded, failed };
 }
 
 // ─────────────────────────────────────────────

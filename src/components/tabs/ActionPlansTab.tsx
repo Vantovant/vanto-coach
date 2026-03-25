@@ -28,7 +28,6 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { Checkbox } from '@/components/ui/checkbox';
-import { ScrollArea } from '@/components/ui/scroll-area';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Progress } from '@/components/ui/progress';
 import {
@@ -46,10 +45,12 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
-import type { CoachActionItem, ActionType, Priority, LifeArea } from '@/types/coach';
+import type { CoachActionItem, ActionType } from '@/types/coach';
 import { cn } from '@/lib/utils';
-import { getActionItems, updateActionItemStatus } from '@/lib/supabase/db';
+import { getActionItems, updateActionItemStatus, bulkUpdateActionItemStatus } from '@/lib/supabase/db';
 import { useAuth } from '@/context/AuthContext';
+import { toast } from 'sonner';
+import { captureError, captureMessage } from '@/lib/monitoring';
 
 export function ActionPlansTab() {
   const { user } = useAuth();
@@ -91,11 +92,8 @@ export function ActionPlansTab() {
 
   const toggleSelect = (id: string) => {
     const newSelected = new Set(selectedItems);
-    if (newSelected.has(id)) {
-      newSelected.delete(id);
-    } else {
-      newSelected.add(id);
-    }
+    if (newSelected.has(id)) newSelected.delete(id);
+    else newSelected.add(id);
     setSelectedItems(newSelected);
   };
 
@@ -104,18 +102,89 @@ export function ActionPlansTab() {
     setSelectedItems(new Set(pendingIds));
   };
 
-  const handleApproveSelected = async () => {
+  // ── Per-item handlers ────────────────────────────────────────────────────
+
+  const handleApproveItem = React.useCallback(async (id: string) => {
+    // Optimistic
+    setActionItems(prev => prev.map(i => i.id === id ? { ...i, status: 'approved' as const } : i));
+    const ok = await updateActionItemStatus(id, 'approved');
+    if (!ok) {
+      setActionItems(prev => prev.map(i => i.id === id ? { ...i, status: 'pending' as const } : i));
+      captureMessage('approveItem failed', 'error', { context: 'actions:approve', actionItemId: id });
+      toast.error('Failed to approve action', { description: 'Please try again.' });
+    } else {
+      toast.success('Action approved');
+    }
+  }, []);
+
+  const handleRejectItem = React.useCallback(async (id: string) => {
+    // Optimistic
+    setActionItems(prev => prev.map(i => i.id === id ? { ...i, status: 'rejected' as const } : i));
+    const ok = await updateActionItemStatus(id, 'rejected');
+    if (!ok) {
+      setActionItems(prev => prev.map(i => i.id === id ? { ...i, status: 'pending' as const } : i));
+      captureMessage('rejectItem failed', 'error', { context: 'actions:reject', actionItemId: id });
+      toast.error('Failed to reject action', { description: 'Please try again.' });
+    } else {
+      toast.success('Action rejected');
+    }
+  }, []);
+
+  const handleMoveToPending = React.useCallback(async (id: string, prevStatus: CoachActionItem['status']) => {
+    setActionItems(prev => prev.map(i => i.id === id ? { ...i, status: 'pending' as const } : i));
+    const ok = await updateActionItemStatus(id, 'pending');
+    if (!ok) {
+      setActionItems(prev => prev.map(i => i.id === id ? { ...i, status: prevStatus } : i));
+      captureMessage('moveToPending failed', 'error', { context: 'actions:pending', actionItemId: id });
+      toast.error('Failed to update action', { description: 'Please try again.' });
+    } else {
+      toast.success('Moved back to pending');
+    }
+  }, []);
+
+  // ── Bulk handlers ────────────────────────────────────────────────────────
+
+  const handleBulkApprove = async () => {
     const ids = Array.from(selectedItems);
-    await Promise.all(ids.map(id => updateActionItemStatus(id, 'approved')));
-    setActionItems(prev => prev.map(item =>
-      ids.includes(item.id) ? { ...item, status: 'approved' as const } : item
+    if (!ids.length) return;
+    // Optimistic
+    setActionItems(prev => prev.map(i =>
+      ids.includes(i.id) ? { ...i, status: 'approved' as const } : i
     ));
     setSelectedItems(new Set());
+
+    const { succeeded, failed } = await bulkUpdateActionItemStatus(ids, 'approved');
+    if (failed > 0) {
+      captureMessage(`bulk approve: ${failed}/${ids.length} failed`, 'warning', { context: 'actions:bulkApprove' });
+      toast.error(`${failed} action${failed > 1 ? 's' : ''} failed to approve`, {
+        description: 'The rest were approved successfully.',
+      });
+    } else {
+      toast.success(`${succeeded} action${succeeded > 1 ? 's' : ''} approved`);
+    }
   };
 
-  const handleSyncToVantoOS = () => {
-    setShowSyncDialog(true);
+  const handleBulkReject = async () => {
+    const ids = Array.from(selectedItems);
+    if (!ids.length) return;
+    // Optimistic
+    setActionItems(prev => prev.map(i =>
+      ids.includes(i.id) ? { ...i, status: 'rejected' as const } : i
+    ));
+    setSelectedItems(new Set());
+
+    const { succeeded, failed } = await bulkUpdateActionItemStatus(ids, 'rejected');
+    if (failed > 0) {
+      captureMessage(`bulk reject: ${failed}/${ids.length} failed`, 'warning', { context: 'actions:bulkReject' });
+      toast.error(`${failed} action${failed > 1 ? 's' : ''} failed to reject`, {
+        description: 'The rest were rejected successfully.',
+      });
+    } else {
+      toast.success(`${succeeded} action${succeeded > 1 ? 's' : ''} rejected`);
+    }
   };
+
+  const handleSyncToVantoOS = () => setShowSyncDialog(true);
 
   return (
     <div className="pb-24 md:pb-8">
@@ -138,13 +207,13 @@ export function ActionPlansTab() {
             <div className="flex items-center gap-2">
               {selectedItems.size > 0 && (
                 <>
-                  <Badge variant="secondary">
-                    {selectedItems.size} selected
-                  </Badge>
-                  <Button variant="outline" size="sm" onClick={() => setSelectedItems(new Set())}>
-                    Clear
+                  <Badge variant="secondary">{selectedItems.size} selected</Badge>
+                  <Button variant="outline" size="sm" onClick={() => setSelectedItems(new Set())}>Clear</Button>
+                  <Button variant="outline" size="sm" onClick={handleBulkReject} className="gap-2">
+                    <X className="h-4 w-4" />
+                    Reject
                   </Button>
-                  <Button size="sm" onClick={handleApproveSelected} className="gap-2">
+                  <Button size="sm" onClick={handleBulkApprove} className="gap-2">
                     <Check className="h-4 w-4" />
                     Approve
                   </Button>
@@ -154,9 +223,7 @@ export function ActionPlansTab() {
                 <Button onClick={handleSyncToVantoOS} className="gap-2">
                   <Send className="h-4 w-4" />
                   Sync to VantoOS
-                  <Badge variant="secondary" className="ml-1 bg-primary-foreground/20">
-                    {approvedCount}
-                  </Badge>
+                  <Badge variant="secondary" className="ml-1 bg-primary-foreground/20">{approvedCount}</Badge>
                 </Button>
               )}
             </div>
@@ -237,9 +304,7 @@ export function ActionPlansTab() {
               <TabsTrigger value="pending" className="gap-2">
                 Pending
                 {pendingCount > 0 && (
-                  <Badge variant="secondary" className="h-5 px-1.5 text-[10px]">
-                    {pendingCount}
-                  </Badge>
+                  <Badge variant="secondary" className="h-5 px-1.5 text-[10px]">{pendingCount}</Badge>
                 )}
               </TabsTrigger>
               <TabsTrigger value="approved">Approved</TabsTrigger>
@@ -249,25 +314,23 @@ export function ActionPlansTab() {
           </Tabs>
         </div>
 
-        {/* Bulk Actions */}
+        {/* Bulk Actions Bar */}
         {activeTab === 'pending' && pendingCount > 0 && (
           <div className="flex items-center justify-between p-3 rounded-lg bg-muted/50">
             <div className="flex items-center gap-3">
               <Checkbox
-                checked={selectedItems.size === pendingCount}
+                checked={selectedItems.size === pendingCount && pendingCount > 0}
                 onCheckedChange={(checked) => checked ? selectAll() : setSelectedItems(new Set())}
               />
-              <span className="text-sm text-muted-foreground">
-                Select all pending items
-              </span>
+              <span className="text-sm text-muted-foreground">Select all pending items</span>
             </div>
             {selectedItems.size > 0 && (
               <div className="flex items-center gap-2">
-                <Button variant="outline" size="sm" className="gap-2">
+                <Button variant="outline" size="sm" className="gap-2" onClick={handleBulkReject}>
                   <X className="h-4 w-4" />
                   Reject
                 </Button>
-                <Button size="sm" onClick={handleApproveSelected} className="gap-2">
+                <Button size="sm" onClick={handleBulkApprove} className="gap-2">
                   <Check className="h-4 w-4" />
                   Approve Selected
                 </Button>
@@ -287,9 +350,7 @@ export function ActionPlansTab() {
                       <Target className="h-5 w-5 text-primary" />
                     </div>
                     <div>
-                      <CardTitle className="text-base">
-                        Session
-                      </CardTitle>
+                      <CardTitle className="text-base">Session</CardTitle>
                       <CardDescription className="text-xs">
                         {items[0]?.created_at ? format(parseISO(items[0].created_at), 'MMMM d, yyyy') : 'Unknown date'}
                         {' • '}{items.length} actions extracted
@@ -312,6 +373,9 @@ export function ActionPlansTab() {
                       item={item}
                       isSelected={selectedItems.has(item.id)}
                       onToggleSelect={() => toggleSelect(item.id)}
+                      onApprove={handleApproveItem}
+                      onReject={handleRejectItem}
+                      onMoveToPending={handleMoveToPending}
                     />
                   ))}
                 </div>
@@ -327,9 +391,7 @@ export function ActionPlansTab() {
                   No action items found. Record journal entries to extract actions.
                 </p>
                 <Link href="/coach?tab=diary&record=true">
-                  <Button variant="link" className="mt-2">
-                    Record an Entry
-                  </Button>
+                  <Button variant="link" className="mt-2">Record an Entry</Button>
                 </Link>
               </CardContent>
             </Card>
@@ -337,7 +399,7 @@ export function ActionPlansTab() {
         </div>
       </div>
 
-      {/* Sync Dialog */}
+      {/* Sync Dialog — Coming Soon */}
       <Dialog open={showSyncDialog} onOpenChange={setShowSyncDialog}>
         <DialogContent>
           <DialogHeader>
@@ -346,8 +408,7 @@ export function ActionPlansTab() {
               Sync to VantoOS Plan
             </DialogTitle>
             <DialogDescription>
-              This will create tasks, reminders, and meetings in your VantoOS Plan.
-              Duplicate items will be merged automatically.
+              VantoOS Plan sync is coming soon. Your approved actions are saved and ready to sync when the integration launches.
             </DialogDescription>
           </DialogHeader>
           <div className="py-4">
@@ -358,13 +419,9 @@ export function ActionPlansTab() {
                   <div className="flex-1 min-w-0">
                     <p className="text-sm font-medium truncate">{item.title}</p>
                     <div className="flex items-center gap-2 mt-1">
-                      <Badge variant="outline" className="text-[10px] capitalize">
-                        {item.action_type}
-                      </Badge>
+                      <Badge variant="outline" className="text-[10px] capitalize">{item.action_type}</Badge>
                       {item.category && (
-                        <Badge variant="secondary" className="text-[10px] capitalize">
-                          {item.category}
-                        </Badge>
+                        <Badge variant="secondary" className="text-[10px] capitalize">{item.category}</Badge>
                       )}
                     </div>
                   </div>
@@ -373,15 +430,8 @@ export function ActionPlansTab() {
             </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setShowSyncDialog(false)}>
-              Cancel
-            </Button>
-            <Button onClick={() => {
-              // In real app, this would sync to VantoOS
-              setShowSyncDialog(false);
-            }} className="gap-2">
-              <Send className="h-4 w-4" />
-              Sync {approvedCount} Items
+            <Button onClick={() => setShowSyncDialog(false)}>
+              Got it
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -394,34 +444,37 @@ function ActionItemRow({
   item,
   isSelected,
   onToggleSelect,
+  onApprove,
+  onReject,
+  onMoveToPending,
 }: {
   item: CoachActionItem;
   isSelected: boolean;
   onToggleSelect: () => void;
+  onApprove: (id: string) => void;
+  onReject: (id: string) => void;
+  onMoveToPending: (id: string, prevStatus: CoachActionItem['status']) => void;
 }) {
   return (
     <div className={cn(
       'flex items-center gap-3 p-3 rounded-lg transition-colors',
       item.status === 'pending' ? 'bg-warning/5 hover:bg-warning/10' :
       item.status === 'approved' ? 'bg-primary/5 hover:bg-primary/10' :
+      item.status === 'rejected' ? 'bg-destructive/5' :
       item.status === 'synced' ? 'bg-success/5' :
       'bg-muted/50 hover:bg-muted'
     )}>
       {item.status === 'pending' && (
-        <Checkbox
-          checked={isSelected}
-          onCheckedChange={onToggleSelect}
-        />
+        <Checkbox checked={isSelected} onCheckedChange={onToggleSelect} />
       )}
-      {item.status === 'synced' && (
-        <CheckCircle2 className="h-4 w-4 text-success shrink-0" />
-      )}
-      {item.status === 'approved' && (
-        <Clock className="h-4 w-4 text-primary shrink-0" />
-      )}
+      {item.status === 'synced' && <CheckCircle2 className="h-4 w-4 text-success shrink-0" />}
+      {item.status === 'approved' && <Clock className="h-4 w-4 text-primary shrink-0" />}
+      {item.status === 'rejected' && <X className="h-4 w-4 text-destructive shrink-0" />}
 
       <div className="flex-1 min-w-0">
-        <p className="font-medium text-sm">{item.title}</p>
+        <p className={cn('font-medium text-sm', item.status === 'rejected' && 'line-through text-muted-foreground')}>
+          {item.title}
+        </p>
         <div className="flex items-center gap-2 mt-1">
           <Badge variant="outline" className="text-[10px] capitalize gap-1">
             {getActionTypeIcon(item.action_type)}
@@ -438,9 +491,7 @@ function ActionItemRow({
             {item.priority}
           </Badge>
           {item.category && (
-            <Badge variant="secondary" className="text-[10px] capitalize">
-              {item.category}
-            </Badge>
+            <Badge variant="secondary" className="text-[10px] capitalize">{item.category}</Badge>
           )}
           {item.due_date && (
             <span className="text-xs text-muted-foreground flex items-center gap-1">
@@ -469,23 +520,26 @@ function ActionItemRow({
         <DropdownMenuContent align="end">
           {item.status === 'pending' && (
             <>
-              <DropdownMenuItem>
+              <DropdownMenuItem onClick={() => onApprove(item.id)}>
                 <Check className="h-4 w-4 mr-2" />
                 Approve
               </DropdownMenuItem>
-              <DropdownMenuItem>
+              <DropdownMenuItem onClick={() => onReject(item.id)}>
                 <X className="h-4 w-4 mr-2" />
                 Reject
               </DropdownMenuItem>
               <DropdownMenuSeparator />
             </>
           )}
-          <DropdownMenuItem>
-            Edit
-          </DropdownMenuItem>
-          <DropdownMenuItem className="text-destructive">
-            Delete
-          </DropdownMenuItem>
+          {(item.status === 'approved' || item.status === 'rejected') && (
+            <>
+              <DropdownMenuItem onClick={() => onMoveToPending(item.id, item.status)}>
+                <Clock className="h-4 w-4 mr-2" />
+                Move to Pending
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+            </>
+          )}
         </DropdownMenuContent>
       </DropdownMenu>
     </div>

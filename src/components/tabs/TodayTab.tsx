@@ -225,6 +225,7 @@ export function TodayTab() {
   const [actionItems, setActionItems] = React.useState<CoachActionItem[]>([]);
   const [prayerPoints, setPrayerPoints] = React.useState<PrayerPointRow[]>([]);
   const [recentSessions, setRecentSessions] = React.useState<CoachSession[]>([]);
+  const [showAllPrayers, setShowAllPrayers] = React.useState(false);
 
   React.useEffect(() => {
     const today = new Date();
@@ -515,7 +516,7 @@ export function TodayTab() {
                 {prayerPoints.length} active
               </Badge>
             </div>
-            {prayerPoints.length > 3 && (
+            {prayerPoints.length > 3 && !showAllPrayers && (
               <p className="text-xs text-muted-foreground mt-1 ml-10">
                 Showing 3 of {prayerPoints.length}
               </p>
@@ -529,7 +530,7 @@ export function TodayTab() {
                 </p>
               ) : (
                 <>
-                  {prayerPoints.slice(0, 3).map((prayer) => (
+                  {(showAllPrayers ? prayerPoints : prayerPoints.slice(0, 3)).map((prayer) => (
                     <div key={prayer.id} className="flex items-start gap-3 p-3 rounded-lg bg-muted/40 hover:bg-muted/60 transition-colors cursor-pointer">
                       <Heart className="h-4 w-4 text-[hsl(var(--spiritual))] mt-0.5 shrink-0" />
                       <div className="flex-1 min-w-0">
@@ -548,12 +549,17 @@ export function TodayTab() {
                     </div>
                   ))}
                   {prayerPoints.length > 3 && (
-                    <Link href="/coach?tab=memory">
-                      <Button variant="ghost" size="sm" className="w-full text-xs text-muted-foreground gap-1 mt-1">
-                        View all {prayerPoints.length} prayer requests
-                        <ChevronRight className="h-3 w-3" />
-                      </Button>
-                    </Link>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="w-full text-xs text-muted-foreground gap-1 mt-1"
+                      onClick={() => setShowAllPrayers(prev => !prev)}
+                    >
+                      {showAllPrayers
+                        ? 'Show less'
+                        : `View all ${prayerPoints.length} prayer requests`}
+                      <ChevronRight className={`h-3 w-3 transition-transform ${showAllPrayers ? 'rotate-90' : ''}`} />
+                    </Button>
                   )}
                 </>
               )}

@@ -97,7 +97,10 @@ export function InsightsTab() {
           trend: 'stable' as const,
           insight: `Mentioned in ${count} session${count > 1 ? 's' : ''}`,
         })),
-        challenges: periodSessions.flatMap(s => s.structured_entry?.struggles ?? []).slice(0, 3),
+        challenges: periodSessions.flatMap(s => [
+          ...(s.structured_entry?.struggles ?? []),
+          ...(s.structured_entry?.fears ?? []),
+        ]).filter(Boolean).slice(0, 5),
         recommendations: ['Keep journaling consistently', 'Review and act on extracted action items', 'Pray over recurring struggles'],
         scripture_focus: [],
         next_steps: periodSessions.flatMap(s => s.structured_entry?.followups ?? []).slice(0, 3),
@@ -330,13 +333,13 @@ export function InsightsTab() {
                 </div>
               </CardHeader>
               <CardContent>
-                {insight.challenges.length === 0 ? (
+                {(insight.challenges ?? []).length === 0 ? (
                   <p className="text-sm text-muted-foreground py-1">
-                    No struggles recorded in this period. Keep journaling to surface patterns.
+                    No challenges recorded yet. Keep journaling to surface patterns.
                   </p>
                 ) : (
                   <ul className="space-y-2">
-                    {insight.challenges.map((challenge, idx) => (
+                    {(insight.challenges ?? []).map((challenge, idx) => (
                       <li key={idx} className="flex items-center gap-2 text-sm">
                         <div className="h-1.5 w-1.5 rounded-full bg-warning" />
                         {challenge}

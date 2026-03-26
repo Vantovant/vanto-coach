@@ -73,10 +73,24 @@ export function ScriptureTab() {
   // Check if we should show the study view
   const studyRef = searchParams.get('study');
 
-  const [selectedBook, setSelectedBook] = React.useState('Proverbs');
-  const [selectedChapter, setSelectedChapter] = React.useState(3);
-  const [highlightedVerse, setHighlightedVerse] = React.useState<number | null>(null);
-  const [activeTab, setActiveTab] = React.useState<'read' | 'topics' | 'saved' | 'history'>('read');
+  // Seed initial book/chapter/verse directly from URL params so the reader
+  // never flashes Proverbs 3 when navigated to from Today or Saved links.
+  const [selectedBook, setSelectedBook] = React.useState(() => {
+    const p = getScriptureParamsFromUrl(searchParams);
+    return p?.book ?? 'Proverbs';
+  });
+  const [selectedChapter, setSelectedChapter] = React.useState(() => {
+    const p = getScriptureParamsFromUrl(searchParams);
+    return p?.chapter ?? 3;
+  });
+  const [highlightedVerse, setHighlightedVerse] = React.useState<number | null>(() => {
+    const p = getScriptureParamsFromUrl(searchParams);
+    return p?.verse ?? null;
+  });
+  const [activeTab, setActiveTab] = React.useState<'read' | 'topics' | 'saved' | 'history'>(() => {
+    const p = getScriptureParamsFromUrl(searchParams);
+    return p ? 'read' : 'read';
+  });
   const [showBookSelector, setShowBookSelector] = React.useState(false);
   const [selectedVerse, setSelectedVerse] = React.useState<BibleVerse | null>(null);
   // savedVerses stores verse key → full verse data so Saved tab can render text without re-fetching

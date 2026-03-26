@@ -450,10 +450,7 @@ export function InsightsTab() {
                   <Button
                     variant="outline"
                     className="gap-2"
-                    onClick={() => {
-                      setPeriod('week');
-                      toast.info('Switched to 7-day view');
-                    }}
+                    onClick={() => setPeriod('week')}
                   >
                     <BarChart3 className="h-4 w-4" />
                     7-Day Analysis

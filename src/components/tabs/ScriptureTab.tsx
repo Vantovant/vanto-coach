@@ -83,10 +83,20 @@ export function ScriptureTab() {
   const [savedVerses, setSavedVerses] = React.useState<Map<string, BibleVerse>>(new Map());
   const [searchQuery, setSearchQuery] = React.useState('');
   const [studyReference, setStudyReference] = React.useState<string | null>(null);
+  // Real reading history — populated as the user navigates chapters
+  const [readingHistory, setReadingHistory] = React.useState<Array<{ book: string; chapter: number; visitedAt: Date }>>([]);
 
   // Fetch the currently selected chapter from the live Bible API
   const chapterRef = `${selectedBook} ${selectedChapter}`;
   const { passage: chapterPassage, isLoading: chapterLoading } = useBibleVerse(chapterRef);
+
+  // Track chapter visits in real reading history
+  const recordHistory = React.useCallback((book: string, chapter: number) => {
+    setReadingHistory(prev => {
+      const filtered = prev.filter(h => !(h.book === book && h.chapter === chapter));
+      return [{ book, chapter, visitedAt: new Date() }, ...filtered].slice(0, 20);
+    });
+  }, []);
 
   // Handle URL navigation parameters
   React.useEffect(() => {
@@ -100,6 +110,7 @@ export function ScriptureTab() {
         setSelectedChapter(navParams.chapter);
         setHighlightedVerse(navParams.verse || null);
         setActiveTab('read');
+        recordHistory(book.name, navParams.chapter);
 
         // Scroll to highlighted verse after a short delay
         if (navParams.verse) {
@@ -112,7 +123,7 @@ export function ScriptureTab() {
         }
       }
     }
-  }, [navParams]);
+  }, [navParams, recordHistory]);
 
   // Handle study view URL parameter
   React.useEffect(() => {
@@ -256,7 +267,7 @@ export function ScriptureTab() {
                 </Button>
                 <Select
                   value={selectedChapter.toString()}
-                  onValueChange={(v) => setSelectedChapter(parseInt(v))}
+                  onValueChange={(v) => { const ch = parseInt(v); setSelectedChapter(ch); recordHistory(selectedBook, ch); }}
                 >
                   <SelectTrigger className="w-24">
                     <SelectValue />
@@ -276,7 +287,7 @@ export function ScriptureTab() {
                   variant="outline"
                   size="icon"
                   disabled={selectedChapter <= 1}
-                  onClick={() => setSelectedChapter(c => Math.max(1, c - 1))}
+                  onClick={() => { const ch = Math.max(1, selectedChapter - 1); setSelectedChapter(ch); recordHistory(selectedBook, ch); }}
                 >
                   <ChevronLeft className="h-4 w-4" />
                 </Button>
@@ -284,7 +295,7 @@ export function ScriptureTab() {
                   variant="outline"
                   size="icon"
                   disabled={selectedChapter >= (currentBook?.chapters || 1)}
-                  onClick={() => setSelectedChapter(c => Math.min(currentBook?.chapters || c, c + 1))}
+                  onClick={() => { const ch = Math.min(currentBook?.chapters || selectedChapter, selectedChapter + 1); setSelectedChapter(ch); recordHistory(selectedBook, ch); }}
                 >
                   <ChevronRight className="h-4 w-4" />
                 </Button>
@@ -411,15 +422,30 @@ export function ScriptureTab() {
                         "{selectedVerse.text}"
                       </blockquote>
                       <div className="flex flex-wrap gap-2">
-                        <Button variant="outline" size="sm" className="gap-2">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="gap-2"
+                          onClick={() => toast.info('AI verse coaching coming soon')}
+                        >
                           <Sparkles className="h-4 w-4" />
                           Get Coaching
                         </Button>
-                        <Button variant="outline" size="sm" className="gap-2">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="gap-2"
+                          onClick={() => toast.info('Verse reflection notes coming soon')}
+                        >
                           <MessageSquare className="h-4 w-4" />
                           Add Reflection
                         </Button>
-                        <Button variant="outline" size="sm" className="gap-2">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="gap-2"
+                          onClick={() => toast.info('Guided prayer for this verse coming soon')}
+                        >
                           <Heart className="h-4 w-4" />
                           Pray This
                         </Button>
@@ -579,34 +605,52 @@ export function ScriptureTab() {
                 </div>
               </CardHeader>
               <CardContent>
-                <div className="space-y-3">
-                  {[
-                    { book: 'Proverbs', chapter: 3, date: 'Today' },
-                    { book: 'Philippians', chapter: 4, date: 'Yesterday' },
-                    { book: 'Psalm', chapter: 23, date: 'Mar 16' },
-                    { book: 'James', chapter: 1, date: 'Mar 15' },
-                  ].map((item, idx) => (
-                    <div
-                      key={idx}
-                      className="flex items-center justify-between p-3 rounded-lg bg-muted/50 hover:bg-muted cursor-pointer transition-colors"
-                      onClick={() => {
-                        setSelectedBook(item.book);
-                        setSelectedChapter(item.chapter);
-                        setActiveTab('read');
-                      }}
-                    >
-                      <div className="flex items-center gap-3">
-                        <BookMarked className="h-4 w-4 text-accent" />
-                        <span className="font-medium">
-                          {item.book} {item.chapter}
-                        </span>
-                      </div>
-                      <span className="text-sm text-muted-foreground">
-                        {item.date}
-                      </span>
-                    </div>
-                  ))}
-                </div>
+                {readingHistory.length === 0 ? (
+                  <div className="py-8 text-center">
+                    <Clock className="h-10 w-10 mx-auto text-muted-foreground/30 mb-3" />
+                    <p className="text-sm text-muted-foreground">
+                      No reading history yet. Navigate to a chapter and it will appear here.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {readingHistory.map((item, idx) => {
+                      const now = new Date();
+                      const diff = now.getTime() - item.visitedAt.getTime();
+                      const mins = Math.floor(diff / 60000);
+                      const dateLabel = mins < 1
+                        ? 'Just now'
+                        : mins < 60
+                        ? `${mins}m ago`
+                        : diff < 86400000
+                        ? 'Today'
+                        : diff < 172800000
+                        ? 'Yesterday'
+                        : item.visitedAt.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+                      return (
+                        <div
+                          key={idx}
+                          className="flex items-center justify-between p-3 rounded-lg bg-muted/50 hover:bg-muted cursor-pointer transition-colors"
+                          onClick={() => {
+                            setSelectedBook(item.book);
+                            setSelectedChapter(item.chapter);
+                            setActiveTab('read');
+                          }}
+                        >
+                          <div className="flex items-center gap-3">
+                            <BookMarked className="h-4 w-4 text-accent" />
+                            <span className="font-medium">
+                              {item.book} {item.chapter}
+                            </span>
+                          </div>
+                          <span className="text-sm text-muted-foreground">
+                            {dateLabel}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
               </CardContent>
             </Card>
           </div>
@@ -626,6 +670,7 @@ export function ScriptureTab() {
                   setSelectedBook(book.name);
                   setSelectedChapter(1);
                   setShowBookSelector(false);
+                  recordHistory(book.name, 1);
                 }}
               >
                 <BookMarked className="h-4 w-4 mr-2" />
@@ -644,6 +689,7 @@ export function ScriptureTab() {
                   setSelectedBook(book.name);
                   setSelectedChapter(1);
                   setShowBookSelector(false);
+                  recordHistory(book.name, 1);
                 }}
               >
                 <BookMarked className="h-4 w-4 mr-2" />

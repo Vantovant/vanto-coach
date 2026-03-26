@@ -523,24 +523,40 @@ export function TodayTab() {
           </CardHeader>
           <CardContent>
             <div className="space-y-2.5">
-              {prayerPoints.slice(0, 3).map((prayer) => (
-                <div key={prayer.id} className="flex items-start gap-3 p-3 rounded-lg bg-muted/40 hover:bg-muted/60 transition-colors cursor-pointer">
-                  <Heart className="h-4 w-4 text-[hsl(var(--spiritual))] mt-0.5 shrink-0" />
-                  <div className="flex-1 min-w-0">
-                    <p className="font-medium text-sm">{prayer.content}</p>
-                    <div className="flex items-center gap-2 mt-1.5">
-                      {prayer.category && (
-                        <Badge variant="outline" className="text-[10px] capitalize font-normal">
-                          {prayer.category}
-                        </Badge>
-                      )}
-                      <span className="text-xs text-muted-foreground">
-                        Since {format(new Date(prayer.created_at), 'MMM d')}
-                      </span>
+              {prayerPoints.length === 0 ? (
+                <p className="text-sm text-muted-foreground py-2">
+                  No active prayer requests. They will appear here once extracted from your diary entries.
+                </p>
+              ) : (
+                <>
+                  {prayerPoints.slice(0, 3).map((prayer) => (
+                    <div key={prayer.id} className="flex items-start gap-3 p-3 rounded-lg bg-muted/40 hover:bg-muted/60 transition-colors cursor-pointer">
+                      <Heart className="h-4 w-4 text-[hsl(var(--spiritual))] mt-0.5 shrink-0" />
+                      <div className="flex-1 min-w-0">
+                        <p className="font-medium text-sm">{prayer.content}</p>
+                        <div className="flex items-center gap-2 mt-1.5">
+                          {prayer.category && (
+                            <Badge variant="outline" className="text-[10px] capitalize font-normal">
+                              {prayer.category}
+                            </Badge>
+                          )}
+                          <span className="text-xs text-muted-foreground">
+                            Since {format(new Date(prayer.created_at), 'MMM d')}
+                          </span>
+                        </div>
+                      </div>
                     </div>
-                  </div>
-                </div>
-              ))}
+                  ))}
+                  {prayerPoints.length > 3 && (
+                    <Link href="/coach?tab=memory">
+                      <Button variant="ghost" size="sm" className="w-full text-xs text-muted-foreground gap-1 mt-1">
+                        View all {prayerPoints.length} prayer requests
+                        <ChevronRight className="h-3 w-3" />
+                      </Button>
+                    </Link>
+                  )}
+                </>
+              )}
             </div>
           </CardContent>
         </Card>

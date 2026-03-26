@@ -260,7 +260,7 @@ export function TodayTab() {
     <div className="pb-24 md:pb-8">
       {/* Hero Section */}
       <div className="relative overflow-hidden border-b">
-        <div className="absolute inset-0 bg-gradient-to-br from-primary/[0.03] via-transparent to-accent/[0.04]" />
+        <div className="absolute inset-0 bg-gradient-to-br from-primary/[0.03] via-transparent to-accent/[0.04] pointer-events-none" />
         <div className="container max-w-6xl mx-auto px-4 py-10 md:py-14 relative">
           <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-6">
             <div className="flex-1 animate-fade-in">
@@ -599,7 +599,7 @@ function ScriptureForTodayCard({ scripture, scriptureRef }: ScriptureForTodayCar
   const crossRefs = useCrossReferences(scriptureRef);
 
   return (
-    <Card className="card-elevated overflow-hidden animate-fade-in" style={{ animationDelay: '200ms' }}>
+    <Card className="card-elevated relative overflow-hidden animate-fade-in" style={{ animationDelay: '200ms' }}>
       <div className="absolute inset-0 bg-gradient-to-r from-[hsl(var(--scripture))]/40 via-transparent to-transparent pointer-events-none" />
       <CardHeader className="pb-3 relative">
         <div className="flex items-center justify-between">

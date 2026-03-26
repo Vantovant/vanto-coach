@@ -97,7 +97,10 @@ export function InsightsTab() {
           trend: 'stable' as const,
           insight: `Mentioned in ${count} session${count > 1 ? 's' : ''}`,
         })),
-        challenges: periodSessions.flatMap(s => [
+        // Draw challenges from ALL fetched sessions (not just the period window)
+        // so that recorded struggles/fears are visible even when the user's
+        // most recent diary entry predates the current period cutoff.
+        challenges: sessions.flatMap(s => [
           ...(s.structured_entry?.struggles ?? []),
           ...(s.structured_entry?.fears ?? []),
         ]).filter(Boolean).slice(0, 5),

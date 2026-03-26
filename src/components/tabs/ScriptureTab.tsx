@@ -97,6 +97,8 @@ export function ScriptureTab() {
   const [savedVerses, setSavedVerses] = React.useState<Map<string, BibleVerse>>(new Map());
   const [searchQuery, setSearchQuery] = React.useState('');
   const [studyReference, setStudyReference] = React.useState<string | null>(null);
+  // Tracks which topic cards are fully expanded to show all verses
+  const [expandedTopics, setExpandedTopics] = React.useState<Set<string>>(new Set());
   // Real reading history — populated as the user navigates chapters
   const [readingHistory, setReadingHistory] = React.useState<Array<{ book: string; chapter: number; visitedAt: Date }>>([]);
 
@@ -492,56 +494,81 @@ export function ScriptureTab() {
             </div>
 
             <div className="grid gap-4 md:grid-cols-2">
-              {topicalScriptures.map((topic) => (
-                <Card
-                  key={topic.topic}
-                  className="card-premium hover:shadow-lg transition-all cursor-pointer"
-                  onClick={() => {
-                    // Navigate to the first verse of this topic in the reader
-                    const first = topic.verses[0];
-                    if (first) {
-                      setSelectedBook(first.book);
-                      setSelectedChapter(first.chapter);
-                      setActiveTab('read');
-                    } else {
-                      toast.info('No verses available for this topic yet');
-                    }
-                  }}
-                >
-                  <CardHeader className="pb-3">
-                    <CardTitle className="text-base">{topic.topic}</CardTitle>
-                    <CardDescription className="text-sm">
-                      {topic.description}
-                    </CardDescription>
-                  </CardHeader>
-                  <CardContent>
-                    <div className="space-y-2">
-                      {topic.verses.slice(0, 2).map((verse, idx) => (
-                        <div key={idx} className="p-2 rounded-lg bg-[hsl(var(--scripture))]/30">
-                          <p className="text-xs text-muted-foreground mb-1">
-                            {verse.book} {verse.chapter}:{verse.verse_start}
-                            {verse.verse_end && `-${verse.verse_end}`}
-                          </p>
-                          <p className="text-sm line-clamp-2 italic">
-                            "{verse.text.slice(0, 100)}..."
-                          </p>
-                        </div>
-                      ))}
-                    </div>
-                    <Button
-                      variant="link"
-                      size="sm"
-                      className="px-0 mt-2"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        toast.info('Full topic verse list coming soon');
-                      }}
-                    >
-                      View all {topic.verses.length} verses
-                    </Button>
-                  </CardContent>
-                </Card>
-              ))}
+              {topicalScriptures.map((topic) => {
+                const isExpanded = expandedTopics.has(topic.topic);
+                const displayedVerses = isExpanded ? topic.verses : topic.verses.slice(0, 2);
+                return (
+                  <Card
+                    key={topic.topic}
+                    className="card-premium hover:shadow-lg transition-all cursor-pointer"
+                    onClick={() => {
+                      // Navigate to the first verse of this topic in the reader
+                      const first = topic.verses[0];
+                      if (first) {
+                        setSelectedBook(first.book);
+                        setSelectedChapter(first.chapter);
+                        setActiveTab('read');
+                      }
+                    }}
+                  >
+                    <CardHeader className="pb-3">
+                      <CardTitle className="text-base">{topic.topic}</CardTitle>
+                      <CardDescription className="text-sm">
+                        {topic.description}
+                      </CardDescription>
+                    </CardHeader>
+                    <CardContent>
+                      <div className="space-y-2">
+                        {displayedVerses.map((verse, idx) => (
+                          <div
+                            key={idx}
+                            className="p-2 rounded-lg bg-[hsl(var(--scripture))]/30 cursor-pointer hover:bg-[hsl(var(--scripture))]/50 transition-colors"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setSelectedBook(verse.book);
+                              setSelectedChapter(verse.chapter);
+                              setHighlightedVerse(verse.verse_start);
+                              setActiveTab('read');
+                              recordHistory(verse.book, verse.chapter);
+                            }}
+                          >
+                            <p className="text-xs text-muted-foreground mb-1">
+                              {verse.book} {verse.chapter}:{verse.verse_start}
+                              {verse.verse_end && `-${verse.verse_end}`}
+                            </p>
+                            <p className="text-sm italic">
+                              "{verse.text}"
+                            </p>
+                          </div>
+                        ))}
+                      </div>
+                      {topic.verses.length > 2 && (
+                        <Button
+                          variant="link"
+                          size="sm"
+                          className="px-0 mt-2"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setExpandedTopics(prev => {
+                              const next = new Set(prev);
+                              if (next.has(topic.topic)) {
+                                next.delete(topic.topic);
+                              } else {
+                                next.add(topic.topic);
+                              }
+                              return next;
+                            });
+                          }}
+                        >
+                          {isExpanded
+                            ? 'Show less'
+                            : `View all ${topic.verses.length} verses`}
+                        </Button>
+                      )}
+                    </CardContent>
+                  </Card>
+                );
+              })}
             </div>
           </div>
         )}

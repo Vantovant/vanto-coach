@@ -151,7 +151,7 @@ export function InsightsTab() {
 
       // ── Top areas for recommendations payload ──────────────────────────────
       const topAreas = Object.entries(areaCounts).sort((a, b) => b[1] - a[1]).map(([k]) => k).slice(0, 3);
-      const summaries = periodSessions.slice(0, 4).map(s => s.summary ?? s.title).filter(Boolean) as string[];
+      const summaries = periodSessions.slice(0, 4).map(s => (s.summary ?? s.title ?? '').trim()).filter(Boolean) as string[];
       const prayerThemes = prayerPoints.slice(0, 3).map(p => p.category ?? p.content.slice(0, 30));
 
       const derived: CoachInsight = {
@@ -393,16 +393,20 @@ export function InsightsTab() {
                 </div>
               </CardHeader>
               <CardContent>
-                <ul className="space-y-3">
-                  {insight.key_observations.map((observation, idx) => (
-                    <li key={idx} className="flex items-start gap-3">
-                      <div className="h-6 w-6 rounded-full bg-primary/10 flex items-center justify-center shrink-0">
-                        <span className="text-xs font-medium text-primary">{idx + 1}</span>
-                      </div>
-                      <p className="text-sm text-muted-foreground">{observation}</p>
-                    </li>
-                  ))}
-                </ul>
+                {insight.key_observations.length === 0 ? (
+                  <p className="text-sm text-muted-foreground py-1">No observations recorded yet.</p>
+                ) : (
+                  <ul className="space-y-3">
+                    {insight.key_observations.map((observation, idx) => (
+                      <li key={idx} className="flex items-start gap-3">
+                        <div className="h-6 w-6 rounded-full bg-primary/10 flex items-center justify-center shrink-0">
+                          <span className="text-xs font-medium text-primary">{idx + 1}</span>
+                        </div>
+                        <p className="text-sm text-muted-foreground">{observation}</p>
+                      </li>
+                    ))}
+                  </ul>
+                )}
               </CardContent>
             </Card>
 

@@ -13,8 +13,6 @@ import {
   ChevronRight,
   BarChart3,
   RefreshCw,
-  Download,
-  Share2,
   Sparkles,
   Heart,
   Activity,
@@ -265,13 +263,6 @@ export function InsightsTab() {
                 }}
               >
                 <RefreshCw className="h-4 w-4" />
-              </Button>
-              <Button
-                variant="outline"
-                size="icon"
-                onClick={() => toast.info('Insight export coming soon')}
-              >
-                <Download className="h-4 w-4" />
               </Button>
             </div>
           </div>
@@ -570,33 +561,6 @@ export function InsightsTab() {
             </Card>
             )}
 
-            {/* Generate Report */}
-            <Card className="card-premium bg-muted/30">
-              <CardContent className="p-6 text-center">
-                <Sparkles className="h-10 w-10 mx-auto text-[hsl(var(--spiritual))] mb-4" />
-                <h3 className="text-lg font-semibold mb-2">Generate Detailed Report</h3>
-                <p className="text-sm text-muted-foreground mb-4">
-                  Create a comprehensive executive life coaching report with AI-powered analysis.
-                </p>
-                <div className="flex justify-center gap-2">
-                  <Button
-                    variant="outline"
-                    className="gap-2"
-                    onClick={() => setPeriod('week')}
-                  >
-                    <BarChart3 className="h-4 w-4" />
-                    7-Day Analysis
-                  </Button>
-                  <Button
-                    className="gap-2"
-                    onClick={() => toast.info('Full coaching report coming soon')}
-                  >
-                    <Sparkles className="h-4 w-4" />
-                    Full Coaching Report
-                  </Button>
-                </div>
-              </CardContent>
-            </Card>
           </TabsContent>
         </Tabs>}
       </div>

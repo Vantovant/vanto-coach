@@ -14,7 +14,6 @@ import {
   Search,
   Calendar,
   Repeat,
-  Send,
   Sparkles,
   Check,
   X,
@@ -37,14 +36,6 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog';
 import type { CoachActionItem, ActionType } from '@/types/coach';
 import { cn } from '@/lib/utils';
 import { getActionItems, updateActionItemStatus, bulkUpdateActionItemStatus } from '@/lib/supabase/db';
@@ -54,9 +45,8 @@ import { captureError, captureMessage } from '@/lib/monitoring';
 
 export function ActionPlansTab() {
   const { user } = useAuth();
-  const [activeTab, setActiveTab] = React.useState<'pending' | 'approved' | 'synced' | 'all'>('pending');
+  const [activeTab, setActiveTab] = React.useState<'pending' | 'approved' | 'all'>('pending');
   const [selectedItems, setSelectedItems] = React.useState<Set<string>>(new Set());
-  const [showSyncDialog, setShowSyncDialog] = React.useState(false);
   const [searchQuery, setSearchQuery] = React.useState('');
   const [actionItems, setActionItems] = React.useState<CoachActionItem[]>([]);
   const [loading, setLoading] = React.useState(false);
@@ -88,7 +78,6 @@ export function ActionPlansTab() {
 
   const pendingCount = actionItems.filter(i => i.status === 'pending').length;
   const approvedCount = actionItems.filter(i => i.status === 'approved').length;
-  const syncedCount = actionItems.filter(i => i.status === 'synced').length;
 
   const toggleSelect = (id: string) => {
     const newSelected = new Set(selectedItems);
@@ -184,8 +173,6 @@ export function ActionPlansTab() {
     }
   };
 
-  const handleSyncToVantoOS = () => setShowSyncDialog(true);
-
   return (
     <div className="pb-24 md:pb-8">
       {/* Header */}
@@ -218,13 +205,6 @@ export function ActionPlansTab() {
                     Approve
                   </Button>
                 </>
-              )}
-              {approvedCount > 0 && (
-                <Button onClick={handleSyncToVantoOS} className="gap-2">
-                  <Send className="h-4 w-4" />
-                  Sync to VantoOS
-                  <Badge variant="secondary" className="ml-1 bg-primary-foreground/20">{approvedCount}</Badge>
-                </Button>
               )}
             </div>
           </div>
@@ -264,19 +244,6 @@ export function ActionPlansTab() {
             <CardContent className="p-4">
               <div className="flex items-center justify-between">
                 <div>
-                  <p className="text-sm text-muted-foreground">Synced to Plan</p>
-                  <p className="text-2xl font-semibold">{syncedCount}</p>
-                </div>
-                <div className="h-10 w-10 rounded-full bg-success/20 flex items-center justify-center">
-                  <Send className="h-5 w-5 text-success" />
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-          <Card className="card-premium">
-            <CardContent className="p-4">
-              <div className="flex items-center justify-between">
-                <div>
                   <p className="text-sm text-muted-foreground">Total Extracted</p>
                   <p className="text-2xl font-semibold">{actionItems.length}</p>
                 </div>
@@ -308,7 +275,6 @@ export function ActionPlansTab() {
                 )}
               </TabsTrigger>
               <TabsTrigger value="approved">Approved</TabsTrigger>
-              <TabsTrigger value="synced">Synced</TabsTrigger>
               <TabsTrigger value="all">All</TabsTrigger>
             </TabsList>
           </Tabs>
@@ -399,43 +365,6 @@ export function ActionPlansTab() {
         </div>
       </div>
 
-      {/* Sync Dialog — Coming Soon */}
-      <Dialog open={showSyncDialog} onOpenChange={setShowSyncDialog}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <Send className="h-5 w-5 text-primary" />
-              Sync to VantoOS Plan
-            </DialogTitle>
-            <DialogDescription>
-              VantoOS Plan sync is coming soon. Your approved actions are saved and ready to sync when the integration launches.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="py-4">
-            <div className="space-y-3">
-              {actionItems.filter(i => i.status === 'approved').map(item => (
-                <div key={item.id} className="flex items-center gap-3 p-3 rounded-lg bg-muted/50">
-                  <CheckCircle2 className="h-4 w-4 text-success shrink-0" />
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium truncate">{item.title}</p>
-                    <div className="flex items-center gap-2 mt-1">
-                      <Badge variant="outline" className="text-[10px] capitalize">{item.action_type}</Badge>
-                      {item.category && (
-                        <Badge variant="secondary" className="text-[10px] capitalize">{item.category}</Badge>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-          <DialogFooter>
-            <Button onClick={() => setShowSyncDialog(false)}>
-              Got it
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
     </div>
   );
 }

@@ -130,6 +130,8 @@ export function useSpeechRecognition(
   const recognitionRef = useRef<SpeechRecognition | null>(null);
   const isPausedRef = useRef(false);
   const shouldRestartRef = useRef(false);
+  // Ref to the latest initRecognition so onend can create a fresh instance (required on iOS/mobile)
+  const initRecognitionRef = useRef<(() => SpeechRecognition | null) | null>(null);
 
   // Check for browser support
   useEffect(() => {
@@ -232,11 +234,20 @@ export function useSpeechRecognition(
     recognition.onend = () => {
       // If we should restart (continuous mode and not paused/stopped)
       if (shouldRestartRef.current && !isPausedRef.current) {
-        try {
-          recognition.start();
-        } catch (e) {
-          // Already started or other error - ignore
-        }
+        // On iOS/mobile, calling .start() on the same ended instance fails silently.
+        // Create a fresh instance via a short timeout instead.
+        setTimeout(() => {
+          if (!shouldRestartRef.current || isPausedRef.current) return;
+          const newRecognition = initRecognitionRef.current?.();
+          if (newRecognition) {
+            recognitionRef.current = newRecognition;
+            try {
+              newRecognition.start();
+            } catch (e) {
+              // Already started or device not ready
+            }
+          }
+        }, 100);
       } else if (!isPausedRef.current) {
         setStatus('stopped');
       }
@@ -244,6 +255,11 @@ export function useSpeechRecognition(
 
     return recognition;
   }, [language, continuous, interimResults, maxAlternatives]);
+
+  // Keep the ref current so onend can always call the latest version
+  useEffect(() => {
+    initRecognitionRef.current = initRecognition;
+  }, [initRecognition]);
 
   // Start listening
   const startListening = useCallback(() => {

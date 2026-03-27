@@ -226,6 +226,8 @@ export function TodayTab() {
   const [prayerPoints, setPrayerPoints] = React.useState<PrayerPointRow[]>([]);
   const [recentSessions, setRecentSessions] = React.useState<CoachSession[]>([]);
   const [showAllPrayers, setShowAllPrayers] = React.useState(false);
+  const [showMeditatePanel, setShowMeditatePanel] = React.useState(false);
+  const [showPrayerPanel, setShowPrayerPanel] = React.useState(false);
 
   React.useEffect(() => {
     const today = new Date();
@@ -338,6 +340,8 @@ export function TodayTab() {
         <ScriptureForTodayCard
           scripture={dailyVerse}
           scriptureRef={scriptureRef}
+          showMeditatePanel={showMeditatePanel}
+          onToggleMeditate={() => setShowMeditatePanel(prev => !prev)}
         />
 
         {/* Top 3 Actions & Prayer Focus */}
@@ -423,11 +427,39 @@ export function TodayTab() {
               <Button
                 variant="outline"
                 className="w-full gap-2"
-                onClick={() => toast.info('Guided prayer time coming soon')}
+                onClick={() => setShowPrayerPanel(prev => !prev)}
               >
                 <Heart className="h-4 w-4" />
-                Start Prayer Time
+                {showPrayerPanel ? 'Close Prayer Session' : 'Start Prayer Time'}
               </Button>
+              {showPrayerPanel && (
+                <div className="mt-4 space-y-4 border-t pt-4">
+                  <div>
+                    <p className="text-sm font-semibold text-[hsl(var(--spiritual))] mb-2">Today&apos;s Prayer Focus</p>
+                    <p className="text-sm text-muted-foreground">{briefing.prayerTheme}</p>
+                  </div>
+                  {prayerPoints.length > 0 && (
+                    <div className="space-y-2">
+                      <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Active Prayer Requests</p>
+                      {prayerPoints.slice(0, 5).map(p => (
+                        <div key={p.id} className="flex items-start gap-2 text-sm">
+                          <Heart className="h-3.5 w-3.5 text-[hsl(var(--spiritual))] mt-0.5 shrink-0" />
+                          <span>{p.content}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  <div className="space-y-2">
+                    <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Guided Prayer Steps</p>
+                    {['Begin with praise and thanksgiving to God.', 'Confess anything weighing on your heart.', 'Bring each prayer request before God specifically.', 'Ask for wisdom, strength, and clarity for today.', 'Close by surrendering the day to His will.'].map((step, i) => (
+                      <div key={i} className="flex items-start gap-2 text-sm">
+                        <span className="font-semibold text-[hsl(var(--spiritual))] shrink-0">{i + 1}.</span>
+                        <span className="text-muted-foreground">{step}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </CardContent>
           </Card>
         </div>
@@ -592,9 +624,11 @@ interface ScriptureForTodayCardProps {
     translation: string;
   };
   scriptureRef: string;
+  showMeditatePanel: boolean;
+  onToggleMeditate: () => void;
 }
 
-function ScriptureForTodayCard({ scripture, scriptureRef }: ScriptureForTodayCardProps) {
+function ScriptureForTodayCard({ scripture, scriptureRef, showMeditatePanel, onToggleMeditate }: ScriptureForTodayCardProps) {
   const [showRelated, setShowRelated] = React.useState(false);
   const crossRefs = useCrossReferences(scriptureRef);
 
@@ -626,10 +660,10 @@ function ScriptureForTodayCard({ scripture, scriptureRef }: ScriptureForTodayCar
             variant="outline"
             size="sm"
             className="gap-2"
-            onClick={() => toast.info('Guided meditation coming soon')}
+            onClick={onToggleMeditate}
           >
             <Play className="h-3 w-3" />
-            Meditate
+            {showMeditatePanel ? 'Close Meditation' : 'Meditate'}
           </Button>
           <Link href={`/coach?tab=scripture&book=${scripture.book}&chapter=${scripture.chapter}`}>
             <Button variant="ghost" size="sm" className="gap-2 text-muted-foreground hover:text-foreground">
@@ -638,6 +672,33 @@ function ScriptureForTodayCard({ scripture, scriptureRef }: ScriptureForTodayCar
             </Button>
           </Link>
         </div>
+
+        {/* Meditation Panel */}
+        {showMeditatePanel && (
+          <div className="space-y-4 border-t pt-4">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">Today&apos;s Verse</p>
+              <blockquote className="border-l-2 border-accent/60 pl-3 font-serif italic text-sm text-foreground leading-relaxed">
+                &ldquo;{scripture.text}&rdquo;
+              </blockquote>
+              <p className="text-xs text-muted-foreground mt-1">{scripture.book} {scripture.chapter}:{scripture.verse_start} — {scripture.translation}</p>
+            </div>
+            <div className="space-y-3">
+              <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Guided Reflection</p>
+              {[
+                { step: 'Read', prompt: 'Read the verse slowly, twice. Notice which word or phrase stands out to you.' },
+                { step: 'Reflect', prompt: 'Ask yourself: What is God saying to me through this verse today?' },
+                { step: 'Respond', prompt: 'How does this truth change how you think, feel, or act right now?' },
+                { step: 'Rest', prompt: 'Sit in silence for 1–2 minutes. Let the Word settle into your heart before you move on.' },
+              ].map(({ step, prompt }) => (
+                <div key={step} className="flex gap-3">
+                  <span className="text-xs font-bold text-accent w-14 shrink-0 pt-0.5">{step}</span>
+                  <p className="text-sm text-muted-foreground leading-relaxed">{prompt}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* Cross-References Section */}
         {crossRefs.hasReferences && (

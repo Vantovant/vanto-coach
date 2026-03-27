@@ -733,6 +733,30 @@ export async function bulkUpdateActionItemStatus(
 // SETTINGS
 // ─────────────────────────────────────────────
 
+export async function createInsightAction(title: string): Promise<boolean> {
+  const supabase = createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return false;
+  const today = new Date().toISOString().slice(0, 10);
+  const { error } = await supabase.from('coach_action_items').insert({
+    user_id: user.id,
+    title: title.slice(0, 200),
+    action_type: 'task',
+    priority: 'medium',
+    source: 'coach_extract',
+    status: 'pending',
+    dedupe_key: `${user.id}|insight|${title.slice(0, 30)}|${today}`,
+  });
+  if (error) {
+    captureMessage(`createInsightAction failed: ${error.message}`, 'warning', {
+      context: 'db:createInsightAction',
+      supabaseCode: error.code,
+    });
+    return false;
+  }
+  return true;
+}
+
 export async function getSettings(): Promise<CoachSettings | null> {
   const supabase = createClient();
   const { data: { user } } = await supabase.auth.getUser();

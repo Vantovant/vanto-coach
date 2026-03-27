@@ -42,12 +42,14 @@ import {
 } from '@/components/ui/select';
 import type { CoachInsight, GrowthArea, LifeBalanceScore } from '@/types/coach';
 import { cn } from '@/lib/utils';
-import { getRecentSessions } from '@/lib/supabase/db';
+import { getRecentSessions, createInsightAction } from '@/lib/supabase/db';
 import { useAuth } from '@/context/AuthContext';
 import { toast } from 'sonner';
+import { useRouter } from 'next/navigation';
 
 export function InsightsTab() {
   const { user } = useAuth();
+  const router = useRouter();
   const [period, setPeriod] = React.useState<'week' | 'month' | 'quarter'>('week');
   const [activeTab, setActiveTab] = React.useState<'overview' | 'growth' | 'recommendations'>('overview');
   const [insight, setInsight] = React.useState<CoachInsight | null>(null);
@@ -410,7 +412,15 @@ export function InsightsTab() {
                           variant="link"
                           size="sm"
                           className="px-0 mt-1 h-auto"
-                          onClick={() => toast.info('Action creation from insights coming soon')}
+                          onClick={async () => {
+                            const ok = await createInsightAction(rec);
+                            if (ok) {
+                              toast.success('Action added to your Action Plans');
+                              router.push('/coach?tab=action-plans');
+                            } else {
+                              toast.error('Could not create action — try again');
+                            }
+                          }}
                         >
                           Create Action
                           <ArrowRight className="h-3 w-3 ml-1" />

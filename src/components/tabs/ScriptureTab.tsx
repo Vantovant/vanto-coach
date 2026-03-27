@@ -87,7 +87,18 @@ export function ScriptureTab() {
   const [showBookSelector, setShowBookSelector] = React.useState(false);
   const [selectedVerse, setSelectedVerse] = React.useState<BibleVerse | null>(null);
   // savedVerses stores verse key → full verse data so Saved tab can render text without re-fetching
-  const [savedVerses, setSavedVerses] = React.useState<Map<string, BibleVerse>>(new Map());
+  // Rehydrated from localStorage on mount so bookmarks survive page reload.
+  const [savedVerses, setSavedVerses] = React.useState<Map<string, BibleVerse>>(() => {
+    if (typeof window === 'undefined') return new Map();
+    try {
+      const raw = localStorage.getItem('vanto_saved_verses');
+      if (!raw) return new Map();
+      const entries: [string, BibleVerse][] = JSON.parse(raw);
+      return new Map(entries);
+    } catch {
+      return new Map();
+    }
+  });
   const [searchQuery, setSearchQuery] = React.useState('');
   const [studyReference, setStudyReference] = React.useState<string | null>(null);
   // Tracks which topic cards are fully expanded to show all verses
@@ -165,6 +176,11 @@ export function ScriptureTab() {
       newSaved.set(key, verse);
     }
     setSavedVerses(newSaved);
+    try {
+      localStorage.setItem('vanto_saved_verses', JSON.stringify(Array.from(newSaved.entries())));
+    } catch {
+      // localStorage unavailable (private browsing quota exceeded) — state still updates
+    }
   };
 
   const isVerseSaved = (verse: BibleVerse) => {

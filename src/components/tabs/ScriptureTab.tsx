@@ -11,17 +11,10 @@ import {
   BookmarkCheck,
   Share2,
   Copy,
-  Heart,
-  MessageSquare,
-  Play,
-  Pause,
-  Volume2,
   List,
   Grid3X3,
-  Sparkles,
   X,
   Clock,
-  Filter,
   ExternalLink,
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
@@ -329,9 +322,6 @@ export function ScriptureTab() {
                     <CardDescription>King James Version</CardDescription>
                   </div>
                   <div className="flex items-center gap-2">
-                    <Button variant="ghost" size="icon" onClick={() => toast.info('Audio coming soon')}>
-                      <Volume2 className="h-4 w-4" />
-                    </Button>
                     <Button
                       variant="ghost"
                       size="icon"
@@ -437,35 +427,6 @@ export function ScriptureTab() {
                       <blockquote className="text-lg italic border-l-2 border-accent/50 pl-4 my-3">
                         "{selectedVerse.text}"
                       </blockquote>
-                      <div className="flex flex-wrap gap-2">
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          className="gap-2"
-                          onClick={() => toast.info('AI verse coaching coming soon')}
-                        >
-                          <Sparkles className="h-4 w-4" />
-                          Get Coaching
-                        </Button>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          className="gap-2"
-                          onClick={() => toast.info('Verse reflection notes coming soon')}
-                        >
-                          <MessageSquare className="h-4 w-4" />
-                          Add Reflection
-                        </Button>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          className="gap-2"
-                          onClick={() => toast.info('Guided prayer for this verse coming soon')}
-                        >
-                          <Heart className="h-4 w-4" />
-                          Pray This
-                        </Button>
-                      </div>
                     </div>
                     <Button
                       variant="ghost"
@@ -579,10 +540,6 @@ export function ScriptureTab() {
               <p className="text-muted-foreground">
                 {savedVerses.size} saved verses
               </p>
-              <Button variant="outline" size="sm" className="gap-2">
-                <Filter className="h-4 w-4" />
-                Filter
-              </Button>
             </div>
 
             <div className="space-y-3">

@@ -612,9 +612,6 @@ function EmptyState({ reference }: { reference: string }) {
           Cross-references for {reference} haven't been added yet.
           Check back as we continue to expand our scripture connections.
         </p>
-        <Badge variant="secondary" className="text-xs">
-          More coming soon
-        </Badge>
       </CardContent>
     </Card>
   );

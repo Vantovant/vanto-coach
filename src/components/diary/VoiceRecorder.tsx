@@ -119,12 +119,78 @@ export function VoiceRecorder({ onComplete, onCancel }: VoiceRecorderProps) {
     }
   }, [recordingStatus, transcript]);
 
-  // Auto-process transcript when recording completes
+  // Auto-process transcript when recording completes (Speech API path)
   React.useEffect(() => {
     if (recordingStatus === 'completed' && transcript && transcript.trim().length > 0) {
       processTranscript(transcript);
     }
   }, [recordingStatus, transcript, processTranscript]);
+
+  // ── Audio-blob transcription fallback ───────────────────────────────────────
+  // Fires when recording completes but the Web Speech API produced no text
+  // (common on iOS Safari and any mobile browser without reliable continuous
+  // speech recognition). Sends the raw MediaRecorder blob to /api/ai/transcribe
+  // (Whisper-1) and feeds the result back into the normal processing chain.
+  const audioTranscribedRef = React.useRef(false);
+  const [isAudioTranscribing, setIsAudioTranscribing] = React.useState(false);
+
+  // Reset the guard on each new recording so the effect can fire again
+  React.useEffect(() => {
+    if (recordingStatus === 'recording') {
+      audioTranscribedRef.current = false;
+    }
+  }, [recordingStatus]);
+
+  React.useEffect(() => {
+    const hasText = transcript && transcript.trim().length > 0;
+    if (
+      recordingStatus !== 'completed' ||
+      !audioBlob ||
+      hasText ||                       // Speech API already produced text — skip
+      audioTranscribedRef.current      // already attempted for this recording
+    ) return;
+
+    audioTranscribedRef.current = true;
+
+    const doAudioTranscription = async () => {
+      setIsAudioTranscribing(true);
+      try {
+        const mimeType = audioBlob.type || 'audio/webm';
+        const form = new FormData();
+        form.append('audio', audioBlob);
+        form.append('mimeType', mimeType);
+
+        const response = await fetch('/api/ai/transcribe', {
+          method: 'POST',
+          body: form,
+        });
+
+        if (!response.ok) {
+          const data = await response.json().catch(() => ({}));
+          if (data.missing_env) {
+            // OPENAI_API_KEY not set in this deployment — silent degradation
+            captureMessage(data.error ?? 'Audio transcription unavailable', 'warning', {
+              context: 'diary:audioTranscribe',
+              missing_env: data.missing_env,
+            });
+          }
+          return;
+        }
+
+        const data = await response.json();
+        if (data.success && data.transcript && data.transcript.trim().length > 0) {
+          setEditedTranscript(data.transcript);
+          processTranscript(data.transcript);
+        }
+      } catch (err) {
+        captureError(err, { context: 'diary:audioTranscribe' });
+      } finally {
+        setIsAudioTranscribing(false);
+      }
+    };
+
+    doAudioTranscription();
+  }, [recordingStatus, audioBlob, transcript, processTranscript]);
 
   // Handle audio playback events
   React.useEffect(() => {

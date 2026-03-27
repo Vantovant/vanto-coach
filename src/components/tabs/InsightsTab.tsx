@@ -25,6 +25,7 @@ import {
   CheckCircle2,
   ArrowRight,
   BookMarked,
+  Loader2,
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -42,10 +43,62 @@ import {
 } from '@/components/ui/select';
 import type { CoachInsight, GrowthArea, LifeBalanceScore } from '@/types/coach';
 import { cn } from '@/lib/utils';
-import { getRecentSessions, createInsightAction } from '@/lib/supabase/db';
+import { getRecentSessions, createInsightAction, getPrayerPoints } from '@/lib/supabase/db';
 import { useAuth } from '@/context/AuthContext';
+import { MOOD_SENTIMENTS } from '@/lib/ai/config';
 import { toast } from 'sonner';
 import { useRouter } from 'next/navigation';
+
+// ── Real mood variance ──────────────────────────────────────────────────────
+// Computes a 0–1 variance score from actual mood sentiment values.
+// 0 = perfectly stable (all moods identical); 1 = maximum swing (0→1 back to 0).
+function computeMoodVariance(moods: string[]): number {
+  if (moods.length < 2) return 0;
+  const scores = moods.map(m => MOOD_SENTIMENTS[m] ?? 0.5);
+  const mean = scores.reduce((a, b) => a + b, 0) / scores.length;
+  const variance = scores.reduce((acc, s) => acc + Math.pow(s - mean, 2), 0) / scores.length;
+  // Normalise: max possible variance for a 0–1 range is 0.25
+  return Math.min(1, variance / 0.25);
+}
+
+// ── Real life balance (relative frequency model) ────────────────────────────
+// Each area is scored by its share of total life-area mentions across the period,
+// scaled to 0–100. If an area has zero mentions it gets a neutral floor (35) —
+// not 50, because absence of mention is a mild signal of neglect, not balance.
+// If the user has no sessions at all, all areas return 50 as a true unknown.
+const BALANCE_AREAS = ['faith', 'family', 'health', 'finances', 'business', 'relationships', 'rest', 'growth'] as const;
+const AREA_KEY_MAP: Record<string, string> = { growth: 'personal_growth' };
+
+function computeLifeBalance(areaCounts: Record<string, number>, hasAnySessions: boolean): CoachInsight['life_balance'] {
+  const totalMentions = Object.values(areaCounts).reduce((a, b) => a + b, 0);
+
+  const entries = BALANCE_AREAS.map(area => {
+    const dbKey = AREA_KEY_MAP[area] ?? area;
+    const count = areaCounts[dbKey] ?? 0;
+    let score: number;
+    if (!hasAnySessions) {
+      score = 50; // genuine unknown
+    } else if (totalMentions === 0) {
+      score = 35; // sessions exist but no areas tagged — mild neglect signal
+    } else {
+      // Relative frequency scaled to 0–100, floored at 20 to avoid dramatic zeros.
+      // *3 multiplier: an area taking 33% of mentions → 100; 10% → 30; 0% → floor 20.
+      score = Math.max(20, Math.min(100, Math.round((count / totalMentions) * 100 * 3)));
+    }
+    return [area, score] as const;
+  });
+
+  return {
+    faith:         entries.find(([k]) => k === 'faith')?.[1]         ?? 50,
+    family:        entries.find(([k]) => k === 'family')?.[1]        ?? 50,
+    health:        entries.find(([k]) => k === 'health')?.[1]        ?? 50,
+    finances:      entries.find(([k]) => k === 'finances')?.[1]      ?? 50,
+    business:      entries.find(([k]) => k === 'business')?.[1]      ?? 50,
+    relationships: entries.find(([k]) => k === 'relationships')?.[1] ?? 50,
+    rest:          entries.find(([k]) => k === 'rest')?.[1]          ?? 50,
+    growth:        entries.find(([k]) => k === 'growth')?.[1]        ?? 50,
+  };
+}
 
 export function InsightsTab() {
   const { user } = useAuth();
@@ -54,12 +107,18 @@ export function InsightsTab() {
   const [activeTab, setActiveTab] = React.useState<'overview' | 'growth' | 'recommendations'>('overview');
   const [insight, setInsight] = React.useState<CoachInsight | null>(null);
   const [loading, setLoading] = React.useState(false);
+  const [aiRecommendations, setAiRecommendations] = React.useState<string[] | null>(null);
+  const [recsLoading, setRecsLoading] = React.useState(false);
 
   React.useEffect(() => {
     if (!user) return;
     setLoading(true);
-    // 90 days max covers the longest insight period (quarter) without full history load
-    getRecentSessions(90).then(sessions => {
+    setAiRecommendations(null);
+
+    Promise.all([
+      getRecentSessions(90),
+      getPrayerPoints('active'),
+    ]).then(([sessions, prayerPoints]) => {
       if (!sessions.length) { setLoading(false); return; }
 
       const today = new Date();
@@ -67,20 +126,35 @@ export function InsightsTab() {
       const cutoff = new Date(today.getTime() - periodDays * 86400000);
       const periodSessions = sessions.filter(s => new Date(s.session_date) >= cutoff);
 
-      // Derive mood trend
+      // ── Mood trend ─────────────────────────────────────────────────────────
       const moodCounts: Record<string, number> = {};
+      const moodList: string[] = [];
       let positiveDays = 0;
       for (const s of periodSessions) {
-        if (s.mood) moodCounts[s.mood] = (moodCounts[s.mood] ?? 0) + 1;
+        if (s.mood) {
+          moodCounts[s.mood] = (moodCounts[s.mood] ?? 0) + 1;
+          moodList.push(s.mood);
+        }
         if (['grateful', 'hopeful', 'peaceful', 'joyful'].includes(s.mood ?? '')) positiveDays++;
       }
       const dominantMood = Object.entries(moodCounts).sort((a, b) => b[1] - a[1])[0]?.[0] ?? 'reflective';
 
-      // Derive life area frequency
+      // ── Life area counts ───────────────────────────────────────────────────
       const areaCounts: Record<string, number> = {};
       for (const s of periodSessions) {
         for (const a of (s.life_areas ?? [])) areaCounts[a] = (areaCounts[a] ?? 0) + 1;
       }
+
+      // ── Challenges ─────────────────────────────────────────────────────────
+      const challenges = sessions.flatMap(s => [
+        ...(s.structured_entry?.struggles ?? []),
+        ...(s.structured_entry?.fears ?? []),
+      ]).filter(Boolean).slice(0, 5);
+
+      // ── Top areas for recommendations payload ──────────────────────────────
+      const topAreas = Object.entries(areaCounts).sort((a, b) => b[1] - a[1]).map(([k]) => k).slice(0, 3);
+      const summaries = periodSessions.slice(0, 4).map(s => s.summary ?? s.title).filter(Boolean) as string[];
+      const prayerThemes = prayerPoints.slice(0, 3).map(p => p.category ?? p.content.slice(0, 30));
 
       const derived: CoachInsight = {
         id: `derived-${period}`,
@@ -92,43 +166,55 @@ export function InsightsTab() {
         summary: periodSessions.length
           ? `${periodSessions.length} session${periodSessions.length > 1 ? 's' : ''} recorded this ${period}. Dominant mood: ${dominantMood}.`
           : `No sessions recorded this ${period} yet.`,
-        key_observations: periodSessions.slice(0, 4).map(s => s.summary ?? s.title).filter(Boolean),
+        key_observations: summaries,
         growth_areas: Object.entries(areaCounts).slice(0, 4).map(([area, count]) => ({
           area: area as GrowthArea['area'],
           score: Math.min(100, count * 20),
           trend: 'stable' as const,
           insight: `Mentioned in ${count} session${count > 1 ? 's' : ''}`,
         })),
-        // Draw challenges from ALL fetched sessions (not just the period window)
-        // so that recorded struggles/fears are visible even when the user's
-        // most recent diary entry predates the current period cutoff.
-        challenges: sessions.flatMap(s => [
-          ...(s.structured_entry?.struggles ?? []),
-          ...(s.structured_entry?.fears ?? []),
-        ]).filter(Boolean).slice(0, 5),
-        recommendations: ['Keep journaling consistently', 'Review and act on extracted action items', 'Pray over recurring struggles'],
+        challenges,
+        // Placeholder — replaced below by AI call
+        recommendations: [],
         scripture_focus: [],
         next_steps: periodSessions.flatMap(s => s.structured_entry?.followups ?? []).slice(0, 3),
         mood_trend: {
           dominant_mood: dominantMood as CoachInsight['mood_trend']['dominant_mood'],
-          variance: 0.5,
+          variance: computeMoodVariance(moodList),
           positive_days: positiveDays,
           challenging_days: periodSessions.length - positiveDays,
         },
-        life_balance: {
-          faith: (areaCounts['faith'] ?? 0) * 15 || 50,
-          family: (areaCounts['family'] ?? 0) * 15 || 50,
-          health: (areaCounts['health'] ?? 0) * 15 || 50,
-          finances: (areaCounts['finances'] ?? 0) * 15 || 50,
-          business: (areaCounts['business'] ?? 0) * 15 || 50,
-          relationships: (areaCounts['relationships'] ?? 0) * 15 || 50,
-          rest: (areaCounts['rest'] ?? 0) * 15 || 50,
-          growth: (areaCounts['personal_growth'] ?? 0) * 15 || 50,
-        },
+        life_balance: computeLifeBalance(areaCounts, periodSessions.length > 0),
         created_at: new Date().toISOString(),
       };
       setInsight(derived);
       setLoading(false);
+
+      // ── AI recommendations — async, non-blocking ───────────────────────────
+      if (periodSessions.length > 0) {
+        setRecsLoading(true);
+        fetch('/api/ai/insights-recommendations', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            period,
+            dominantMood,
+            topAreas,
+            challenges,
+            summaries,
+            prayerThemes,
+            sessionCount: periodSessions.length,
+          }),
+        })
+          .then(r => r.json())
+          .then(data => {
+            if (data.success && Array.isArray(data.recommendations) && data.recommendations.length > 0) {
+              setAiRecommendations(data.recommendations);
+            }
+          })
+          .catch(() => { /* silent — fallback renders below */ })
+          .finally(() => setRecsLoading(false));
+      }
     });
   }, [user, period]);
 
@@ -358,11 +444,19 @@ export function InsightsTab() {
 
           <TabsContent value="growth" className="space-y-6 mt-6">
             {/* Growth Areas Detail */}
+            {insight.growth_areas.length > 0 ? (
             <div className="grid gap-4 md:grid-cols-2">
               {insight.growth_areas.map((area) => (
                 <GrowthAreaCard key={area.area} area={area} />
               ))}
             </div>
+            ) : (
+              <Card className="card-premium">
+                <CardContent className="py-8 text-center text-sm text-muted-foreground">
+                  No life areas tagged yet in this period. Record diary entries that mention specific areas of your life to populate growth tracking.
+                </CardContent>
+              </Card>
+            )}
 
             {/* Scripture Focus */}
             {insight.scripture_focus.length > 0 && (
@@ -391,48 +485,69 @@ export function InsightsTab() {
           </TabsContent>
 
           <TabsContent value="recommendations" className="space-y-6 mt-6">
-            {/* Recommendations */}
+            {/* AI Coaching Recommendations */}
             <Card className="card-premium">
               <CardHeader className="pb-3">
-                <div className="flex items-center gap-2">
-                  <Target className="h-5 w-5 text-primary" />
-                  <CardTitle className="text-base">Coaching Recommendations</CardTitle>
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Target className="h-5 w-5 text-primary" />
+                    <CardTitle className="text-base">Coaching Recommendations</CardTitle>
+                  </div>
+                  {recsLoading && (
+                    <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                      <Loader2 className="h-3 w-3 animate-spin" />
+                      Generating…
+                    </div>
+                  )}
                 </div>
               </CardHeader>
               <CardContent>
-                <ul className="space-y-4">
-                  {insight.recommendations.map((rec, idx) => (
-                    <li key={idx} className="flex items-start gap-3 p-3 rounded-lg bg-muted/50">
-                      <div className="h-8 w-8 rounded-full bg-primary flex items-center justify-center shrink-0">
-                        <CheckCircle2 className="h-4 w-4 text-primary-foreground" />
-                      </div>
-                      <div>
-                        <p className="font-medium text-sm">{rec}</p>
-                        <Button
-                          variant="link"
-                          size="sm"
-                          className="px-0 mt-1 h-auto"
-                          onClick={async () => {
-                            const ok = await createInsightAction(rec);
-                            if (ok) {
-                              toast.success('Action added to your Action Plans');
-                              router.push('/coach?tab=action-plans');
-                            } else {
-                              toast.error('Could not create action — try again');
-                            }
-                          }}
-                        >
-                          Create Action
-                          <ArrowRight className="h-3 w-3 ml-1" />
-                        </Button>
-                      </div>
-                    </li>
-                  ))}
-                </ul>
+                {recsLoading && !aiRecommendations ? (
+                  <div className="py-6 flex flex-col items-center gap-2 text-muted-foreground">
+                    <Sparkles className="h-6 w-6 animate-pulse" />
+                    <p className="text-sm">Generating personalised recommendations…</p>
+                  </div>
+                ) : (
+                  <ul className="space-y-4">
+                    {(aiRecommendations ?? []).map((rec, idx) => (
+                      <li key={idx} className="flex items-start gap-3 p-3 rounded-lg bg-muted/50">
+                        <div className="h-8 w-8 rounded-full bg-primary flex items-center justify-center shrink-0">
+                          <CheckCircle2 className="h-4 w-4 text-primary-foreground" />
+                        </div>
+                        <div>
+                          <p className="font-medium text-sm">{rec}</p>
+                          <Button
+                            variant="link"
+                            size="sm"
+                            className="px-0 mt-1 h-auto"
+                            onClick={async () => {
+                              const ok = await createInsightAction(rec);
+                              if (ok) {
+                                toast.success('Action added to your Action Plans');
+                                router.push('/coach?tab=action-plans');
+                              } else {
+                                toast.error('Could not create action — try again');
+                              }
+                            }}
+                          >
+                            Create Action
+                            <ArrowRight className="h-3 w-3 ml-1" />
+                          </Button>
+                        </div>
+                      </li>
+                    ))}
+                    {!recsLoading && (!aiRecommendations || aiRecommendations.length === 0) && (
+                      <li className="text-sm text-muted-foreground py-2">
+                        Recommendations will appear here as you record more sessions.
+                      </li>
+                    )}
+                  </ul>
+                )}
               </CardContent>
             </Card>
 
-            {/* Next Steps */}
+            {/* Next Steps — only shown when data exists */}
+            {insight.next_steps.length > 0 && (
             <Card className="card-premium border-l-4 border-l-primary">
               <CardHeader className="pb-3">
                 <div className="flex items-center gap-2">
@@ -453,6 +568,7 @@ export function InsightsTab() {
                 </ul>
               </CardContent>
             </Card>
+            )}
 
             {/* Generate Report */}
             <Card className="card-premium bg-muted/30">

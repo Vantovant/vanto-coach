@@ -228,6 +228,7 @@ export function TodayTab() {
   const [showAllPrayers, setShowAllPrayers] = React.useState(false);
   const [showMeditatePanel, setShowMeditatePanel] = React.useState(false);
   const [showPrayerPanel, setShowPrayerPanel] = React.useState(false);
+  const [aiSpiritualFocus, setAiSpiritualFocus] = React.useState<string | null>(null);
 
   React.useEffect(() => {
     const today = new Date();
@@ -238,10 +239,50 @@ export function TodayTab() {
   React.useEffect(() => {
     if (!user) return;
     getActionItems().then(setActionItems);
-    getPrayerPoints('active').then(setPrayerPoints);
-    // Load only the 5 most recent sessions — no need to fetch full history
+    getPrayerPoints('active').then(pp => {
+      setPrayerPoints(pp);
+      // AI spiritual focus fires after sessions are also loaded — see combined effect
+    });
     getRecentSessions(5).then(setRecentSessions);
   }, [user]);
+
+  // Fetch AI spiritual focus once sessions + prayer points are available
+  React.useEffect(() => {
+    if (!recentSessions.length) return;
+    setAiSpiritualFocus(null);
+
+    const topicCounts: Record<string, number> = {};
+    for (const s of recentSessions.slice(0, 5)) {
+      for (const t of (s.spiritual_topics ?? [])) topicCounts[t] = (topicCounts[t] ?? 0) + 1;
+    }
+    const topTopics = Object.entries(topicCounts).sort((a, b) => b[1] - a[1]).map(([k]) => k).slice(0, 2);
+    const areaCounts: Record<string, number> = {};
+    for (const s of recentSessions.slice(0, 5)) {
+      for (const a of (s.life_areas ?? [])) areaCounts[a] = (areaCounts[a] ?? 0) + 1;
+    }
+    const topAreas = Object.entries(areaCounts).sort((a, b) => b[1] - a[1]).map(([k]) => k).slice(0, 2);
+    const challenges = recentSessions.flatMap(s => [
+      ...(s.structured_entry?.struggles ?? []),
+    ]).filter(Boolean).slice(0, 2);
+
+    fetch('/api/ai/today-coaching', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        latestMood: recentSessions[0]?.mood ?? null,
+        topAreas,
+        topTopics,
+        recentSummaries: recentSessions.slice(0, 2).map(s => s.summary).filter(Boolean),
+        activePrayerCount: prayerPoints.length,
+        challenges,
+      }),
+    })
+      .then(r => r.json())
+      .then(data => {
+        if (data.success && data.sentence) setAiSpiritualFocus(data.sentence);
+      })
+      .catch(() => { /* fallback text remains */ });
+  }, [recentSessions, prayerPoints]);
 
   // Derive all briefing content from real persisted data (multi-session)
   const briefing = React.useMemo(
@@ -330,7 +371,7 @@ export function TodayTab() {
             </CardHeader>
             <CardContent>
               <p className="text-foreground leading-relaxed">
-                {briefing.spiritualFocus}
+                {aiSpiritualFocus ?? briefing.spiritualFocus}
               </p>
             </CardContent>
           </Card>

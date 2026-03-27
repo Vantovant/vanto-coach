@@ -168,10 +168,17 @@ export function VoiceRecorder({ onComplete, onCancel }: VoiceRecorderProps) {
         if (!response.ok) {
           const data = await response.json().catch(() => ({}));
           if (data.missing_env) {
-            // OPENAI_API_KEY not set in this deployment — silent degradation
+            // OPENAI_API_KEY not set in this deployment
             captureMessage(data.error ?? 'Audio transcription unavailable', 'warning', {
               context: 'diary:audioTranscribe',
               missing_env: data.missing_env,
+            });
+            toast.warning('Auto-transcription unavailable', {
+              description: 'You can type your transcript manually below.',
+            });
+          } else {
+            toast.error('Transcription failed', {
+              description: 'Could not transcribe audio. You can type your transcript manually.',
             });
           }
           return;
@@ -181,6 +188,11 @@ export function VoiceRecorder({ onComplete, onCancel }: VoiceRecorderProps) {
         if (data.success && data.transcript && data.transcript.trim().length > 0) {
           setEditedTranscript(data.transcript);
           processTranscript(data.transcript);
+          toast.success('Audio transcribed', { description: 'Transcript captured from your recording.' });
+        } else if (data.success) {
+          toast.warning('No speech detected', {
+            description: 'No words were found in the recording. You can add a transcript manually.',
+          });
         }
       } catch (err) {
         captureError(err, { context: 'diary:audioTranscribe' });
@@ -702,7 +714,7 @@ export function VoiceRecorder({ onComplete, onCancel }: VoiceRecorderProps) {
                 <span className="text-sm font-medium">Transcript</span>
                 <Badge className={cn('text-[10px]', transcriptStatus.color)}>
                   {transcriptStatus.icon}
-                  {transcript ? 'Captured' : 'Empty'}
+                  {(editedTranscript || transcript) ? 'Captured' : isAudioTranscribing ? 'Transcribing…' : 'Empty'}
                 </Badge>
               </div>
               {(transcript || editedTranscript) && !isEditingTranscript && (
@@ -755,6 +767,11 @@ export function VoiceRecorder({ onComplete, onCancel }: VoiceRecorderProps) {
                   <p className="text-sm leading-relaxed whitespace-pre-wrap">
                     {editedTranscript || transcript}
                   </p>
+                ) : isAudioTranscribing ? (
+                  <span className="flex items-center gap-2 text-sm text-muted-foreground">
+                    <Loader2 className="h-3.5 w-3.5 animate-spin shrink-0" />
+                    Transcribing audio…
+                  </span>
                 ) : (
                   <p className="text-sm text-muted-foreground italic">
                     {isSpeechSupported
@@ -765,7 +782,7 @@ export function VoiceRecorder({ onComplete, onCancel }: VoiceRecorderProps) {
               </div>
             )}
 
-            {!transcript && !editedTranscript && (
+            {!transcript && !editedTranscript && !isAudioTranscribing && (
               <Button
                 variant="link"
                 size="sm"

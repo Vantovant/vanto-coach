@@ -1,6 +1,7 @@
 'use client';
 
 import * as React from 'react';
+import Image from 'next/image';
 import {
   Settings,
   BookMarked,
@@ -418,9 +419,13 @@ export function SettingsTab() {
         {/* About */}
         <Card className="card-premium bg-muted/30">
           <CardContent className="p-6 text-center">
-            <Sparkles className="h-10 w-10 mx-auto text-primary mb-4" />
-            <h3 className="font-semibold mb-1">Vanto Coach</h3>
-            <p className="text-sm text-muted-foreground mb-4">Executive Christian Life Coach</p>
+            <Image
+              src="/brand/vanto-coach-logo-horizontal.png"
+              alt="Vanto Coach — Executive Life Coach"
+              width={280}
+              height={94}
+              className="mx-auto mb-4 h-14 w-auto object-contain"
+            />
             <p className="text-xs text-muted-foreground">Version 1.0.0 • Powered by VantoOS</p>
             <Separator className="my-4" />
             <p className="text-xs text-muted-foreground">

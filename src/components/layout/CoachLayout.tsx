@@ -1,6 +1,7 @@
 'use client';
 
 import * as React from 'react';
+import Image from 'next/image';
 import Link from 'next/link';
 import { usePathname, useSearchParams } from 'next/navigation';
 import { cn } from '@/lib/utils';
@@ -14,7 +15,6 @@ import {
   Settings,
   Menu,
   X,
-  Sparkles,
   ChevronRight,
   Mic,
   Command,
@@ -108,12 +108,22 @@ export function CoachLayout({ children }: CoachLayoutProps) {
             </Sheet>
 
             <Link href="/coach" className="flex items-center gap-3">
-              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-primary/15 to-primary/5 border border-primary/10">
-                <Sparkles className="h-5 w-5 text-primary" />
-              </div>
+              <Image
+                src="/icon-192.png"
+                alt="Vanto Coach icon"
+                width={40}
+                height={40}
+                className="h-10 w-10 rounded-xl border border-primary/10 bg-[hsl(var(--background))] object-contain"
+              />
               <div className="hidden sm:block">
-                <h1 className="text-lg font-serif font-semibold tracking-tight">Vanto Coach</h1>
-                <p className="text-[11px] text-muted-foreground -mt-0.5 tracking-wide">Executive Life Coach</p>
+                <Image
+                  src="/brand/vanto-coach-logo-horizontal.png"
+                  alt="Vanto Coach — Executive Life Coach"
+                  width={245}
+                  height={82}
+                  className="h-9 w-auto object-contain"
+                  priority
+                />
               </div>
             </Link>
           </div>
@@ -188,12 +198,21 @@ function MobileNav({ currentTab, onNavigate }: { currentTab: CoachTab; onNavigat
   return (
     <div className="flex h-full flex-col">
       <div className="flex h-16 items-center gap-3 border-b px-4">
-        <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-primary/15 to-primary/5 border border-primary/10">
-          <Sparkles className="h-5 w-5 text-primary" />
-        </div>
+        <Image
+          src="/icon-192.png"
+          alt="Vanto Coach icon"
+          width={40}
+          height={40}
+          className="h-10 w-10 rounded-xl border border-primary/10 bg-[hsl(var(--background))] object-contain"
+        />
         <div>
-          <h2 className="font-serif font-semibold">Vanto Coach</h2>
-          <p className="text-[11px] text-muted-foreground tracking-wide">Executive Life Coach</p>
+          <Image
+            src="/brand/vanto-coach-logo-horizontal.png"
+            alt="Vanto Coach — Executive Life Coach"
+            width={210}
+            height={70}
+            className="h-8 w-auto object-contain"
+          />
         </div>
       </div>
       <ScrollArea className="flex-1 px-2 py-4">

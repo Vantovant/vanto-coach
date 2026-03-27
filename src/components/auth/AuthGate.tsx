@@ -1,7 +1,8 @@
 'use client';
 
 import * as React from 'react';
-import { Sparkles, Loader2, Mail, Lock, User, Eye, EyeOff, ArrowRight, BookOpen } from 'lucide-react';
+import Image from 'next/image';
+import { Loader2, Mail, Lock, User, Eye, EyeOff, ArrowRight, BookOpen } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -19,9 +20,13 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-background">
         <div className="flex flex-col items-center gap-4">
-          <div className="h-12 w-12 rounded-xl bg-gradient-to-br from-primary/15 to-primary/5 border border-primary/10 flex items-center justify-center">
-            <Sparkles className="h-6 w-6 text-primary animate-pulse" />
-          </div>
+          <Image
+            src="/icon-192.png"
+            alt="Vanto Coach icon"
+            width={48}
+            height={48}
+            className="h-12 w-12 rounded-xl border border-primary/10 bg-[hsl(var(--background))] object-contain animate-pulse"
+          />
           <p className="text-sm text-muted-foreground">Loading Vanto Coach…</p>
         </div>
       </div>
@@ -93,11 +98,22 @@ function AuthScreen() {
       <div className="w-full max-w-md relative">
         {/* Logo */}
         <div className="flex flex-col items-center mb-8">
-          <div className="h-16 w-16 rounded-2xl bg-gradient-to-br from-primary/20 to-primary/5 border border-primary/15 flex items-center justify-center mb-4 shadow-sm">
-            <Sparkles className="h-8 w-8 text-primary" />
-          </div>
-          <h1 className="text-2xl font-serif font-semibold tracking-tight">Vanto Coach</h1>
-          <p className="text-sm text-muted-foreground mt-1">Executive Christian Life Coach</p>
+          <Image
+            src="/icon-192.png"
+            alt="Vanto Coach icon"
+            width={64}
+            height={64}
+            className="mb-4 h-16 w-16 rounded-2xl border border-primary/15 bg-[hsl(var(--background))] object-contain shadow-sm"
+            priority
+          />
+          <Image
+            src="/brand/vanto-coach-logo-horizontal.png"
+            alt="Vanto Coach — Executive Life Coach"
+            width={320}
+            height={107}
+            className="h-16 w-auto object-contain"
+            priority
+          />
         </div>
 
         {!isConfigured && (

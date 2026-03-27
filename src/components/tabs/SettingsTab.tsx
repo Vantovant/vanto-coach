@@ -10,7 +10,6 @@ import {
   Bell,
   Download,
   Trash2,
-  Info,
   Sparkles,
   Heart,
 } from 'lucide-react';
@@ -422,17 +421,6 @@ export function SettingsTab() {
                 {exporting ? 'Exporting…' : 'Export All Data'}
               </Button>
 
-              {/* Import — coming soon */}
-              <Button
-                variant="outline"
-                className="gap-2 opacity-50 cursor-not-allowed"
-                disabled
-                title="Import is not yet available"
-              >
-                <Info className="h-4 w-4" />
-                Import Data
-                <Badge variant="secondary" className="text-[10px] ml-1">Soon</Badge>
-              </Button>
             </div>
 
             <Separator />
@@ -470,32 +458,6 @@ export function SettingsTab() {
           </CardContent>
         </Card>
 
-        {/* VantoOS Integration */}
-        <Card className="card-premium">
-          <CardHeader>
-            <div className="flex items-center gap-2">
-              <Sparkles className="h-5 w-5 text-primary" />
-              <CardTitle className="text-base">VantoOS Integration</CardTitle>
-            </div>
-            <CardDescription>Connect with VantoOS Plan for task synchronization.</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="flex items-center justify-between p-4 rounded-lg bg-muted/50">
-              <div className="flex items-center gap-3">
-                <div className="h-10 w-10 rounded-full bg-primary/10 flex items-center justify-center">
-                  <Sparkles className="h-5 w-5 text-primary" />
-                </div>
-                <div>
-                  <p className="font-medium">VantoOS Plan</p>
-                  <p className="text-sm text-muted-foreground">Tasks, reminders, and meetings sync</p>
-                </div>
-              </div>
-              <Badge variant="secondary" className="bg-warning/20 text-warning">
-                Coming Soon
-              </Badge>
-            </div>
-          </CardContent>
-        </Card>
 
         {/* About */}
         <Card className="card-premium bg-muted/30">

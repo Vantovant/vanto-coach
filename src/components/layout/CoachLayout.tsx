@@ -23,6 +23,7 @@ import {
 import { Button } from '@/components/ui/button';
 import { Sheet, SheetContent, SheetTrigger } from '@/components/ui/sheet';
 import { ScrollArea } from '@/components/ui/scroll-area';
+import { InstallPrompt } from '@/components/pwa/InstallPrompt';
 import type { CoachTab } from '@/types/coach';
 import { signOut } from '@/lib/supabase/auth';
 import { useAuth } from '@/context/AuthContext';
@@ -139,6 +140,7 @@ export function CoachLayout({ children }: CoachLayoutProps) {
 
           {/* Right Actions */}
           <div className="flex items-center gap-2">
+            <InstallPrompt />
             <Button
               variant="outline"
               size="sm"

@@ -15,6 +15,11 @@ export function ClientBody({
     document.body.className = "antialiased";
   }, []);
 
+  useEffect(() => {
+    if (typeof window === 'undefined' || !('serviceWorker' in navigator)) return;
+    navigator.serviceWorker.register('/sw.js').catch(() => {});
+  }, []);
+
   return (
     <AuthProvider>
       <div className="antialiased">{children}</div>

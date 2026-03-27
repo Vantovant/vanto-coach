@@ -104,7 +104,18 @@ export function ScriptureTab() {
   // Tracks which topic cards are fully expanded to show all verses
   const [expandedTopics, setExpandedTopics] = React.useState<Set<string>>(new Set());
   // Real reading history — populated as the user navigates chapters
-  const [readingHistory, setReadingHistory] = React.useState<Array<{ book: string; chapter: number; visitedAt: Date }>>([]);
+  // Rehydrated from localStorage on mount so history survives page reload.
+  const [readingHistory, setReadingHistory] = React.useState<Array<{ book: string; chapter: number; visitedAt: Date }>>(() => {
+    if (typeof window === 'undefined') return [];
+    try {
+      const raw = localStorage.getItem('vanto_reading_history');
+      if (!raw) return [];
+      const parsed: Array<{ book: string; chapter: number; visitedAt: string }> = JSON.parse(raw);
+      return parsed.map(h => ({ ...h, visitedAt: new Date(h.visitedAt) }));
+    } catch {
+      return [];
+    }
+  });
 
   // Fetch the currently selected chapter from the live Bible API
   const chapterRef = `${selectedBook} ${selectedChapter}`;
@@ -114,7 +125,13 @@ export function ScriptureTab() {
   const recordHistory = React.useCallback((book: string, chapter: number) => {
     setReadingHistory(prev => {
       const filtered = prev.filter(h => !(h.book === book && h.chapter === chapter));
-      return [{ book, chapter, visitedAt: new Date() }, ...filtered].slice(0, 20);
+      const updated = [{ book, chapter, visitedAt: new Date() }, ...filtered].slice(0, 20);
+      try {
+        localStorage.setItem('vanto_reading_history', JSON.stringify(updated));
+      } catch {
+        // localStorage unavailable — state still updates
+      }
+      return updated;
     });
   }, []);
 

@@ -9,7 +9,6 @@ import {
   Shield,
   Bell,
   Download,
-  Trash2,
   Sparkles,
   Heart,
 } from 'lucide-react';
@@ -27,17 +26,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-  AlertDialogTrigger,
-} from '@/components/ui/alert-dialog';
 import type { CoachSettings, CoachingTone, BibleTranslation } from '@/types/coach';
 import { getSettings, upsertSettings, getSessions, getMemories, getActionItems } from '@/lib/supabase/db';
 import { useAuth } from '@/context/AuthContext';
@@ -423,38 +411,6 @@ export function SettingsTab() {
 
             </div>
 
-            <Separator />
-
-            {/* Delete All — dialog confirms but action is informational until API endpoint exists */}
-            <AlertDialog>
-              <AlertDialogTrigger asChild>
-                <Button variant="destructive" className="gap-2">
-                  <Trash2 className="h-4 w-4" />
-                  Delete All Data
-                </Button>
-              </AlertDialogTrigger>
-              <AlertDialogContent>
-                <AlertDialogHeader>
-                  <AlertDialogTitle>Are you absolutely sure?</AlertDialogTitle>
-                  <AlertDialogDescription>
-                    This action cannot be undone. This will permanently delete all your journal entries,
-                    audio recordings, memories, and coaching data. To proceed, please contact support
-                    or delete your account directly from the Supabase dashboard.
-                  </AlertDialogDescription>
-                </AlertDialogHeader>
-                <AlertDialogFooter>
-                  <AlertDialogCancel>Cancel</AlertDialogCancel>
-                  <AlertDialogAction
-                    className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-                    onClick={() => toast.info('Please contact support to delete all data.', {
-                      description: 'Bulk deletion requires manual verification to protect your account.',
-                    })}
-                  >
-                    I understand — contact support
-                  </AlertDialogAction>
-                </AlertDialogFooter>
-              </AlertDialogContent>
-            </AlertDialog>
           </CardContent>
         </Card>
 

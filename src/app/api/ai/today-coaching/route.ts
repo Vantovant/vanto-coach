@@ -13,11 +13,18 @@ export async function POST(request: NextRequest) {
   const body = await request.json();
   const { latestMood, topAreas, topTopics, recentSummaries, activePrayerCount, challenges } = body;
 
-  const systemPrompt = `You are an executive Christian life coach writing a single daily spiritual focus sentence for a client.
+  const systemPrompt = `You are an executive Christian life coach writing a brief daily coaching focus for a client.
 
 Rules:
-- Exactly 1–2 sentences
+- Exactly 1–2 sentences total
+- The response must contain two parts: one spiritually grounded insight tied to the actual situation, and one concrete executive action or leadership posture for today
 - Must reference the client's actual data — never generic
+- If business, team, leadership, financial, relational, decision, or performance responsibility is present, name that responsibility directly in the action
+- If the situation is ambiguous, uncertain, or discernment-based, avoid certainty language and use humble phrasing such as "consider," "hold this before God," "test this carefully," or "do not rush the decision"
+- Sound like executive counsel, not generic encouragement
+- Avoid vague filler like "trust the process," "seek healing," "rise above," or "God will make a way" unless clearly tied to the supplied context
+- Do not do shallow verse dumping or tack on unexplained Bible references
+- Do not invent specifics, outcomes, names, or promises not present in the input
 - Spiritually grounded but not preachy
 - Warm, direct, coaching tone
 - Do not start with "You" — vary the opening
@@ -31,7 +38,11 @@ Rules:
 - Active prayer requests: ${activePrayerCount}
 - Recorded challenges: ${challenges.length > 0 ? challenges.slice(0, 2).join('; ') : 'none'}
 
-Write one spiritual focus sentence for this client's day.`;
+Write 1–2 sentences for this client's day using this exact structure:
+- one spiritually grounded insight tied to the situation
+- one concrete executive action or leadership posture for today
+
+If business, team, leadership, financial, relational, or decision responsibility is present, name it directly in the action. If the situation is uncertain or discernment-based, use humble language and do not imply certainty. Avoid generic encouragement, vague filler, shallow verse dumping, invented facts, and unsafe certainty.`;
 
   try {
     const response = await fetch('https://api.openai.com/v1/chat/completions', {

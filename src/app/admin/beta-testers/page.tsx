@@ -1,7 +1,6 @@
 import { redirect } from 'next/navigation';
 import {
   Activity,
-  ArrowUpRight,
   Clock3,
   KeyRound,
   Layers3,
@@ -88,7 +87,7 @@ function routeChips(route: string | null) {
     .split(/[/?=&]/)
     .map((part) => part.trim())
     .filter(Boolean)
-    .slice(0, 4);
+    .slice(0, 3);
 }
 
 async function createInviteCodeAction() {
@@ -99,13 +98,13 @@ async function createInviteCodeAction() {
   redirect('/admin/beta-testers');
 }
 
-function SectionFrame({ title, subtitle, children, eyebrow }: { title: string; subtitle?: string; eyebrow?: string; children: React.ReactNode }) {
+function SectionFrame({ title, subtitle, children, eyebrow, compact = false }: { title: string; subtitle?: string; eyebrow?: string; compact?: boolean; children: React.ReactNode }) {
   return (
-    <section className="overflow-hidden rounded-[28px] border border-white/10 bg-white/5 shadow-[0_20px_80px_rgba(0,0,0,0.35)] backdrop-blur-sm">
-      <div className="border-b border-white/8 px-5 py-4 sm:px-6">
+    <section className="overflow-hidden rounded-[22px] border border-white/8 bg-white/[0.04] shadow-[0_16px_40px_rgba(0,0,0,0.22)] backdrop-blur-sm">
+      <div className={`border-b border-white/8 ${compact ? 'px-4 py-3' : 'px-5 py-4 sm:px-6'}`}>
         {eyebrow && <p className="text-[11px] font-medium uppercase tracking-[0.28em] text-slate-500">{eyebrow}</p>}
-        <h2 className="mt-1 text-base font-semibold text-white sm:text-lg">{title}</h2>
-        {subtitle && <p className="mt-1 text-sm text-slate-400">{subtitle}</p>}
+        <h2 className="mt-1 text-sm font-semibold text-white sm:text-base">{title}</h2>
+        {subtitle && <p className="mt-1 text-xs leading-5 text-slate-400 sm:text-sm">{subtitle}</p>}
       </div>
       <div>{children}</div>
     </section>
@@ -132,108 +131,105 @@ export default async function BetaTestersPage() {
   const recent = (recentRes.data ?? []) as RecentRow[];
   const invites = (inviteRes.data ?? []) as InviteCodeRow[];
 
-  const topRoutes = tops.filter((item) => item.kind === 'route').slice(0, 5);
-  const topActions = tops.filter((item) => item.kind === 'action').slice(0, 5);
+  const topRoutes = tops.filter((item) => item.kind === 'route').slice(0, 4);
+  const topActions = tops.filter((item) => item.kind === 'action').slice(0, 4);
+  const compactSummary = testers.slice(0, 6);
 
   return (
     <main className="min-h-screen bg-[#07111f] text-white">
       <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(56,189,248,0.12),transparent_28%),radial-gradient(circle_at_top_right,rgba(34,197,94,0.10),transparent_24%),linear-gradient(180deg,#07111f_0%,#0b1324_45%,#08101d_100%)]" />
-      <div className="relative mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8 lg:py-10">
-        <div className="space-y-8">
-          <section className="overflow-hidden rounded-[32px] border border-white/10 bg-gradient-to-br from-slate-900/95 via-slate-900/85 to-slate-950/90 shadow-[0_30px_120px_rgba(0,0,0,0.45)]">
-            <div className="grid gap-8 px-6 py-8 sm:px-8 lg:grid-cols-[1.15fr_0.85fr] lg:px-10 lg:py-10">
-              <div className="space-y-5">
-                <div className="inline-flex items-center gap-2 rounded-full border border-cyan-400/20 bg-cyan-400/10 px-3 py-1 text-xs font-medium uppercase tracking-[0.24em] text-cyan-200">
+      <div className="relative mx-auto max-w-7xl px-4 py-5 sm:px-6 lg:px-8 lg:py-8">
+        <div className="space-y-5">
+          <section className="overflow-hidden rounded-[24px] border border-white/6 bg-[linear-gradient(180deg,rgba(15,23,42,0.9),rgba(10,15,28,0.88))] shadow-[0_18px_48px_rgba(0,0,0,0.22)]">
+            <div className="grid gap-5 px-5 py-5 sm:px-7 lg:grid-cols-[1.1fr_0.9fr] lg:px-8 lg:py-6">
+              <div className="space-y-3">
+                <div className="inline-flex items-center gap-2 rounded-full border border-cyan-300/14 bg-cyan-300/6 px-3 py-1 text-[10px] font-medium uppercase tracking-[0.22em] text-cyan-50">
                   <ShieldCheck className="h-3.5 w-3.5" />
                   Admin-only Beta Console
                 </div>
-                <div className="space-y-3">
-                  <h1 className="text-4xl font-semibold tracking-tight text-white sm:text-5xl">Vanto Coach Beta Management Console</h1>
-                  <p className="max-w-2xl text-sm leading-6 text-slate-300 sm:text-base">
-                    Operator-grade reporting for tester growth, invite supply, activity signals, and recent product movement using only real tracked beta data.
+                <div className="space-y-2">
+                  <h1 className="text-[30px] font-semibold tracking-tight text-white sm:text-4xl">Vanto Coach Beta Management Console</h1>
+                  <p className="max-w-2xl text-sm leading-6 text-slate-300/85">
+                    Calm, compact reporting for tester growth, invite inventory, usage signals, and live telemetry using only real tracked product data.
                   </p>
                 </div>
-                <div className="grid gap-3 sm:grid-cols-3">
-                  <div className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3">
-                    <div className="text-xs uppercase tracking-[0.2em] text-slate-500">Top page</div>
-                    <div className="mt-1 font-medium text-white">{overview?.top_page ?? 'Not yet instrumented'}</div>
-                    <div className="mt-1 text-xs text-slate-500">{overview?.top_page_views ?? 0} tracked views</div>
+                <div className="grid gap-2.5 sm:grid-cols-3">
+                  <div className="rounded-[16px] border border-white/7 bg-white/[0.025] px-4 py-2">
+                    <div className="text-[11px] uppercase tracking-[0.2em] text-slate-500">Top page</div>
+                    <div className="mt-1 text-sm font-medium text-white">{overview?.top_page ?? 'Not yet instrumented'}</div>
+                    <div className="mt-1 text-[11px] text-slate-500">{overview?.top_page_views ?? 0} views</div>
                   </div>
-                  <div className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3">
-                    <div className="text-xs uppercase tracking-[0.2em] text-slate-500">Top action</div>
-                    <div className="mt-1 font-medium text-white">{overview?.top_action ?? 'Not yet instrumented'}</div>
-                    <div className="mt-1 text-xs text-slate-500">{overview?.top_action_count ?? 0} action hits</div>
+                  <div className="rounded-[16px] border border-white/7 bg-white/[0.025] px-4 py-2">
+                    <div className="text-[11px] uppercase tracking-[0.2em] text-slate-500">Top action</div>
+                    <div className="mt-1 text-sm font-medium text-white">{overview?.top_action ?? 'Not yet instrumented'}</div>
+                    <div className="mt-1 text-[11px] text-slate-500">{overview?.top_action_count ?? 0} hits</div>
                   </div>
-                  <div className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3">
-                    <div className="text-xs uppercase tracking-[0.2em] text-slate-500">Reporting focus</div>
-                    <div className="mt-1 font-medium text-white">Tester activity first</div>
-                    <div className="mt-1 text-xs text-slate-500">Invites + telemetry aligned</div>
+                  <div className="rounded-[16px] border border-white/7 bg-white/[0.025] px-4 py-2">
+                    <div className="text-[11px] uppercase tracking-[0.2em] text-slate-500">Console mode</div>
+                    <div className="mt-1 text-sm font-medium text-white">Executive console</div>
+                    <div className="mt-1 text-[11px] text-slate-500">Calm, compact layout</div>
                   </div>
                 </div>
               </div>
 
-              <div className="rounded-[28px] border border-white/10 bg-white/5 p-5 shadow-inner shadow-black/20">
+              <div className="rounded-[20px] border border-white/7 bg-white/[0.025] p-3.5 shadow-inner shadow-black/5">
                 <div className="flex items-start justify-between gap-4">
                   <div>
-                    <p className="text-xs uppercase tracking-[0.24em] text-slate-500">Invite management</p>
-                    <h2 className="mt-2 text-xl font-semibold text-white">Operational invite control</h2>
-                    <p className="mt-1 text-sm text-slate-400">Create one-click beta access codes and keep active inventory visible from the top of the dashboard.</p>
+                    <p className="text-[11px] uppercase tracking-[0.24em] text-slate-500">Invite management</p>
+                    <h2 className="mt-2 text-[17px] font-semibold text-white">Operational invite control</h2>
+                    <p className="mt-1 text-sm text-slate-400/90">Keep invite creation and active supply visible without pushing the dashboard downward.</p>
                   </div>
                   <Sparkles className="h-5 w-5 text-cyan-300" />
                 </div>
-                <form action={createInviteCodeAction} className="mt-6">
-                  <button type="submit" className="inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-cyan-400 px-4 py-3 text-sm font-semibold text-slate-950 transition hover:bg-cyan-300">
+                <form action={createInviteCodeAction} className="mt-4">
+                  <button type="submit" className="inline-flex w-full items-center justify-center gap-2 rounded-[16px] bg-cyan-300/95 px-4 py-2.5 text-sm font-semibold text-slate-950 transition hover:bg-cyan-200">
                     <KeyRound className="h-4 w-4" />
                     Generate invite code
                   </button>
                 </form>
-                <div className="mt-5 grid grid-cols-2 gap-3 text-sm">
-                  <div className="rounded-2xl border border-white/10 bg-slate-950/40 px-4 py-3">
-                    <div className="text-xs uppercase tracking-[0.2em] text-slate-500">Active codes</div>
-                    <div className="mt-2 text-2xl font-semibold text-white">{overview?.active_invite_codes ?? 0}</div>
+                <div className="mt-4 grid grid-cols-2 gap-3 text-sm">
+                  <div className="rounded-[16px] border border-white/7 bg-slate-950/22 px-4 py-2">
+                    <div className="text-[11px] uppercase tracking-[0.2em] text-slate-500">Active codes</div>
+                    <div className="mt-1 text-2xl font-semibold text-white">{overview?.active_invite_codes ?? 0}</div>
                   </div>
-                  <div className="rounded-2xl border border-white/10 bg-slate-950/40 px-4 py-3">
-                    <div className="text-xs uppercase tracking-[0.2em] text-slate-500">Tester base</div>
-                    <div className="mt-2 text-2xl font-semibold text-white">{overview?.total_testers ?? testers.length}</div>
+                  <div className="rounded-[16px] border border-white/7 bg-slate-950/22 px-4 py-2">
+                    <div className="text-[11px] uppercase tracking-[0.2em] text-slate-500">Tester base</div>
+                    <div className="mt-1 text-2xl font-semibold text-white">{overview?.total_testers ?? testers.length}</div>
                   </div>
                 </div>
               </div>
             </div>
           </section>
 
-          <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+          <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
             {[
-              { label: 'Total beta testers', value: overview?.total_testers ?? testers.length, meta: 'Real authenticated users', icon: <Users className="h-5 w-5" />, accent: 'from-cyan-400/30 to-cyan-500/5' },
-              { label: 'Active invite codes', value: overview?.active_invite_codes ?? 0, meta: 'Immediately available invites', icon: <KeyRound className="h-5 w-5" />, accent: 'from-emerald-400/30 to-emerald-500/5' },
-              { label: 'Top page views', value: overview?.top_page_views ?? 0, meta: overview?.top_page ?? 'Not yet instrumented', icon: <Layers3 className="h-5 w-5" />, accent: 'from-fuchsia-400/30 to-fuchsia-500/5' },
-              { label: 'Top action count', value: overview?.top_action_count ?? 0, meta: overview?.top_action ?? 'Not yet instrumented', icon: <WandSparkles className="h-5 w-5" />, accent: 'from-amber-400/30 to-amber-500/5' },
+              { label: 'Total beta testers', value: overview?.total_testers ?? testers.length, meta: 'Authenticated users', icon: <Users className="h-4 w-4" />, accent: 'from-cyan-400/30 to-cyan-500/5' },
+              { label: 'Active invite codes', value: overview?.active_invite_codes ?? 0, meta: 'Codes ready to use', icon: <KeyRound className="h-4 w-4" />, accent: 'from-emerald-400/30 to-emerald-500/5' },
+              { label: 'Top page views', value: overview?.top_page_views ?? 0, meta: overview?.top_page ?? 'Not yet instrumented', icon: <Layers3 className="h-4 w-4" />, accent: 'from-fuchsia-400/30 to-fuchsia-500/5' },
+              { label: 'Top action count', value: overview?.top_action_count ?? 0, meta: overview?.top_action ?? 'Not yet instrumented', icon: <WandSparkles className="h-4 w-4" />, accent: 'from-amber-400/30 to-amber-500/5' },
             ].map((card) => (
-              <div key={card.label} className={`rounded-[28px] border border-white/10 bg-gradient-to-br ${card.accent} bg-slate-900/85 p-5 shadow-[0_20px_60px_rgba(0,0,0,0.35)]`}>
+              <div key={card.label} className={`rounded-[20px] border border-white/8 bg-gradient-to-br ${card.accent} bg-slate-900/85 p-4 shadow-[0_12px_30px_rgba(0,0,0,0.2)]`}>
                 <div className="flex items-center justify-between">
                   <span className="text-sm font-medium text-slate-300">{card.label}</span>
-                  <div className="rounded-2xl border border-white/10 bg-white/5 p-2 text-slate-200">{card.icon}</div>
+                  <div className="rounded-xl border border-white/8 bg-white/[0.04] p-2 text-slate-200">{card.icon}</div>
                 </div>
-                <div className="mt-6 text-4xl font-semibold tracking-tight text-white">{card.value}</div>
-                <div className="mt-2 text-sm text-slate-400">{card.meta}</div>
+                <div className="mt-4 text-[30px] font-semibold tracking-tight text-white">{card.value}</div>
+                <div className="mt-1 text-[11px] text-slate-400">{card.meta}</div>
               </div>
             ))}
           </section>
 
-          <section className="grid gap-6 xl:grid-cols-[0.9fr_1.1fr]">
-            <SectionFrame
-              eyebrow="High-priority operations"
-              title="Invite codes"
-              subtitle="Invite inventory stays high on the page so the admin can create, inspect, and understand code readiness without leaving the dashboard."
-            >
+          <section className="grid gap-4 xl:grid-cols-[0.92fr_1.08fr]">
+            <SectionFrame eyebrow="High-priority operations" title="Invite codes" subtitle="Visible, compact invite inventory with status, usage, and expiry." compact>
               <div className="overflow-x-auto">
                 <table className="min-w-full text-sm">
-                  <thead className="bg-white/[0.03] text-left text-xs uppercase tracking-[0.18em] text-slate-500">
+                  <thead className="bg-white/[0.03] text-left text-[11px] uppercase tracking-[0.18em] text-slate-500">
                     <tr>
-                      <th className="px-5 py-4 font-medium">Code</th>
-                      <th className="px-5 py-4 font-medium">Status</th>
-                      <th className="px-5 py-4 font-medium">Usage</th>
-                      <th className="px-5 py-4 font-medium">Used by</th>
-                      <th className="px-5 py-4 font-medium">Expires</th>
+                      <th className="px-4 py-3 font-medium">Code</th>
+                      <th className="px-4 py-3 font-medium">Status</th>
+                      <th className="px-4 py-3 font-medium">Use</th>
+                      <th className="px-4 py-3 font-medium">Used by</th>
+                      <th className="px-4 py-3 font-medium">Expires</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-white/5">
@@ -241,69 +237,52 @@ export default async function BetaTestersPage() {
                       const status = getInviteStatus(row);
                       return (
                         <tr key={row.id} className="transition hover:bg-white/[0.03]">
-                          <td className="px-5 py-4">
-                            <div className="inline-flex items-center rounded-2xl border border-cyan-400/20 bg-cyan-400/10 px-3 py-2 font-mono text-cyan-100">
-                              {row.code}
-                            </div>
-                            <div className="mt-2 text-xs text-slate-500">Created {formatDate(row.created_at)}</div>
+                          <td className="px-4 py-3">
+                            <div className="inline-flex items-center rounded-xl border border-cyan-300/18 bg-cyan-300/8 px-3 py-1.5 font-mono text-cyan-100">{row.code}</div>
                           </td>
-                          <td className="px-5 py-4">
-                            <span className={`inline-flex rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] ${status.className}`}>
-                              {status.label}
-                            </span>
-                          </td>
-                          <td className="px-5 py-4 text-slate-300">
-                            {row.used_count}{row.max_uses ? ` / ${row.max_uses}` : ''}
-                          </td>
-                          <td className="px-5 py-4 text-slate-300">{row.used_by_email ?? '—'}</td>
-                          <td className="px-5 py-4 text-slate-400">{formatDate(row.expires_at)}</td>
+                          <td className="px-4 py-3"><span className={`inline-flex rounded-full px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] ${status.className}`}>{status.label}</span></td>
+                          <td className="px-4 py-3 text-slate-300">{row.used_count}{row.max_uses ? ` / ${row.max_uses}` : ''}</td>
+                          <td className="px-4 py-3 text-slate-300">{row.used_by_email ?? '—'}</td>
+                          <td className="px-4 py-3 text-slate-400">{formatDate(row.expires_at)}</td>
                         </tr>
                       );
                     })}
-                    {invites.length === 0 && (
-                      <tr>
-                        <td className="px-5 py-10 text-center text-sm text-slate-500" colSpan={5}>No invite codes yet. Generate one to onboard the next tester.</td>
-                      </tr>
-                    )}
+                    {invites.length === 0 && <tr><td className="px-4 py-8 text-center text-sm text-slate-500" colSpan={5}>No invite codes yet.</td></tr>}
                   </tbody>
                 </table>
               </div>
             </SectionFrame>
 
-            <SectionFrame
-              eyebrow="Usage ranking"
-              title="Top pages and top actions"
-              subtitle="A quick operator view of where testers spend time and which product actions they hit the most."
-            >
-              <div className="grid gap-4 p-5 sm:grid-cols-2 sm:p-6">
-                <div className="rounded-[24px] border border-white/8 bg-slate-950/40 p-4">
+            <SectionFrame eyebrow="Usage ranking" title="Top pages and actions" subtitle="Compact ranked reporting for where testers spend time and what they do most." compact>
+              <div className="grid gap-3 p-4 sm:grid-cols-2">
+                <div className="rounded-[18px] border border-white/7 bg-slate-950/28 p-3">
                   <div className="flex items-center justify-between">
-                    <h3 className="text-sm font-semibold uppercase tracking-[0.18em] text-slate-400">Pages visited</h3>
+                    <h3 className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">Pages visited</h3>
                     <Route className="h-4 w-4 text-slate-500" />
                   </div>
-                  <div className="mt-4 space-y-3">
+                  <div className="mt-3 space-y-2">
                     {topRoutes.length === 0 ? <p className="text-sm text-slate-500">Not yet instrumented.</p> : topRoutes.map((item, index) => (
-                      <div key={`${item.kind}-${item.label}`} className="flex items-center justify-between rounded-2xl border border-white/6 bg-white/[0.03] px-4 py-3">
+                      <div key={`${item.kind}-${item.label}`} className="flex items-center justify-between rounded-[16px] border border-white/6 bg-white/[0.025] px-3 py-2">
                         <div>
                           <p className="text-sm font-medium text-white">{item.label}</p>
-                          <p className="mt-1 text-xs text-slate-500">Page rank #{index + 1}</p>
+                          <p className="mt-0.5 text-[11px] text-slate-500">#{index + 1}</p>
                         </div>
-                        <span className="text-sm font-semibold text-cyan-200">{item.total}</span>
+                        <span className="text-sm font-semibold text-cyan-100">{item.total}</span>
                       </div>
                     ))}
                   </div>
                 </div>
-                <div className="rounded-[24px] border border-white/8 bg-slate-950/40 p-4">
+                <div className="rounded-[18px] border border-white/7 bg-slate-950/28 p-3">
                   <div className="flex items-center justify-between">
-                    <h3 className="text-sm font-semibold uppercase tracking-[0.18em] text-slate-400">Most-used actions</h3>
+                    <h3 className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">Most-used actions</h3>
                     <Activity className="h-4 w-4 text-slate-500" />
                   </div>
-                  <div className="mt-4 space-y-3">
+                  <div className="mt-3 space-y-2">
                     {topActions.length === 0 ? <p className="text-sm text-slate-500">Not yet instrumented.</p> : topActions.map((item, index) => (
-                      <div key={`${item.kind}-${item.label}`} className="flex items-center justify-between rounded-2xl border border-white/6 bg-white/[0.03] px-4 py-3">
+                      <div key={`${item.kind}-${item.label}`} className="flex items-center justify-between rounded-[16px] border border-white/6 bg-white/[0.025] px-3 py-2">
                         <div>
                           <p className="text-sm font-medium text-white">{item.label}</p>
-                          <p className="mt-1 text-xs text-slate-500">Action rank #{index + 1}</p>
+                          <p className="mt-0.5 text-[11px] text-slate-500">#{index + 1}</p>
                         </div>
                         <span className="text-sm font-semibold text-emerald-200">{item.total}</span>
                       </div>
@@ -314,53 +293,47 @@ export default async function BetaTestersPage() {
             </SectionFrame>
           </section>
 
-          <SectionFrame
-            eyebrow="Primary reporting surface"
-            title="Tester activity roster"
-            subtitle="The dominant reporting section prioritizes joined date, last active time, action volume, sessions, and last route for fast operator scanning."
-          >
-            <div className="grid gap-4 p-4 sm:p-6 lg:grid-cols-2 xl:grid-cols-1">
+          <SectionFrame eyebrow="Primary reporting surface" title="Tester activity roster" subtitle="Dominant roster with denser reporting for joined, last active, actions, sessions, and last route.">
+            <div className="grid gap-3 p-4 lg:grid-cols-2 xl:grid-cols-1">
               {activity.length === 0 ? (
-                <div className="rounded-[24px] border border-white/6 bg-white/[0.03] px-5 py-10 text-center text-sm text-slate-500">Not yet instrumented.</div>
+                <div className="rounded-[20px] border border-white/6 bg-white/[0.03] px-4 py-8 text-center text-sm text-slate-500">Not yet instrumented.</div>
               ) : activity.map((row) => {
                 const testerSummary = testers.find((tester) => tester.id === row.user_id);
                 return (
-                  <div key={row.user_id} className="rounded-[28px] border border-white/8 bg-slate-950/45 p-5 shadow-[0_12px_40px_rgba(0,0,0,0.18)]">
-                    <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
-                      <div className="space-y-3">
+                  <div key={row.user_id} className="rounded-[20px] border border-white/7 bg-slate-950/30 p-3.5 shadow-[0_8px_24px_rgba(0,0,0,0.12)]">
+                    <div className="grid gap-3 xl:grid-cols-[0.95fr_1.05fr] xl:items-center">
+                      <div className="space-y-2">
                         <div>
-                          <p className="text-lg font-semibold text-white">{row.email}</p>
-                          <p className="mt-1 text-xs uppercase tracking-[0.2em] text-slate-500">Tester ID · {row.user_id.slice(0, 8)}</p>
+                          <p className="text-base font-semibold text-white">{row.email}</p>
+                          <p className="mt-1 text-[11px] uppercase tracking-[0.2em] text-slate-500">Tester ID · {row.user_id.slice(0, 8)}</p>
                         </div>
                         <div className="flex flex-wrap gap-2">
                           {routeChips(row.last_route).map((chip) => (
-                            <span key={chip} className="rounded-full border border-cyan-400/15 bg-cyan-400/8 px-3 py-1 text-xs font-medium text-cyan-100">
-                              {chip}
-                            </span>
+                            <span key={chip} className="rounded-full border border-cyan-400/15 bg-cyan-400/8 px-2.5 py-1 text-[11px] font-medium text-cyan-100">{chip}</span>
                           ))}
                         </div>
                       </div>
 
-                      <div className="grid gap-3 sm:grid-cols-2 xl:min-w-[540px] xl:grid-cols-5">
-                        <div className="rounded-2xl border border-white/8 bg-white/[0.03] px-4 py-3">
-                          <div className="text-[11px] uppercase tracking-[0.2em] text-slate-500">Joined</div>
-                          <div className="mt-2 text-sm font-medium text-white">{formatDate(testerSummary?.created_at ?? row.first_seen)}</div>
+                      <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-5">
+                        <div className="rounded-xl border border-white/8 bg-white/[0.03] px-3 py-2.5">
+                          <div className="text-[10px] uppercase tracking-[0.18em] text-slate-500">Joined</div>
+                          <div className="mt-1 text-sm font-medium text-white">{formatDate(testerSummary?.created_at ?? row.first_seen)}</div>
                         </div>
-                        <div className="rounded-2xl border border-white/8 bg-white/[0.03] px-4 py-3">
-                          <div className="text-[11px] uppercase tracking-[0.2em] text-slate-500">Last active</div>
-                          <div className="mt-2 text-sm font-medium text-white">{formatDate(row.last_seen)}</div>
+                        <div className="rounded-xl border border-white/8 bg-white/[0.03] px-3 py-2.5">
+                          <div className="text-[10px] uppercase tracking-[0.18em] text-slate-500">Last active</div>
+                          <div className="mt-1 text-sm font-medium text-white">{formatDate(row.last_seen)}</div>
                         </div>
-                        <div className="rounded-2xl border border-white/8 bg-white/[0.03] px-4 py-3">
-                          <div className="text-[11px] uppercase tracking-[0.2em] text-slate-500">Actions</div>
-                          <div className="mt-2 text-sm font-semibold text-cyan-200">{row.total_events}</div>
+                        <div className="rounded-xl border border-white/8 bg-white/[0.03] px-3 py-2.5">
+                          <div className="text-[10px] uppercase tracking-[0.18em] text-slate-500">Actions</div>
+                          <div className="mt-1 text-sm font-semibold text-cyan-100">{row.total_events}</div>
                         </div>
-                        <div className="rounded-2xl border border-white/8 bg-white/[0.03] px-4 py-3">
-                          <div className="text-[11px] uppercase tracking-[0.2em] text-slate-500">Sessions</div>
-                          <div className="mt-2 text-sm font-semibold text-emerald-200">{row.total_sessions}</div>
+                        <div className="rounded-xl border border-white/8 bg-white/[0.03] px-3 py-2.5">
+                          <div className="text-[10px] uppercase tracking-[0.18em] text-slate-500">Sessions</div>
+                          <div className="mt-1 text-sm font-semibold text-emerald-200">{row.total_sessions}</div>
                         </div>
-                        <div className="rounded-2xl border border-white/8 bg-white/[0.03] px-4 py-3">
-                          <div className="text-[11px] uppercase tracking-[0.2em] text-slate-500">Last route</div>
-                          <div className="mt-2 text-sm font-medium text-white">{row.last_route ?? '—'}</div>
+                        <div className="rounded-xl border border-white/8 bg-white/[0.03] px-3 py-2.5">
+                          <div className="text-[10px] uppercase tracking-[0.18em] text-slate-500">Last route</div>
+                          <div className="mt-1 text-sm font-medium text-white">{row.last_route ?? '—'}</div>
                         </div>
                       </div>
                     </div>
@@ -370,23 +343,19 @@ export default async function BetaTestersPage() {
             </div>
           </SectionFrame>
 
-          <section className="grid gap-6 lg:grid-cols-[0.95fr_1.05fr]">
-            <SectionFrame
-              eyebrow="Live telemetry"
-              title="Recent activity feed"
-              subtitle="A rolling event stream that tells the operator what is happening right now across the beta experience."
-            >
-              <div className="p-4 sm:p-6">
-                <div className="space-y-3">
-                  {recent.length === 0 ? <p className="text-sm text-slate-500">Not yet instrumented.</p> : recent.slice(0, 20).map((row) => (
-                    <div key={row.id} className="rounded-[22px] border border-white/6 bg-white/[0.03] px-4 py-3">
-                      <div className="flex items-start justify-between gap-3">
-                        <div>
-                          <p className="text-sm font-medium text-white">{row.email ?? 'Unknown user'} · {row.event_name}</p>
-                          <p className="mt-1 text-xs text-slate-400">{row.route ?? '—'} · {row.tab_name ?? row.action_name ?? '—'}</p>
+          <section className="grid gap-4 xl:grid-cols-[0.72fr_0.68fr_0.6fr]">
+            <SectionFrame eyebrow="Live telemetry" title="Recent activity feed" subtitle="Compressed event stream for quick operator awareness." compact>
+              <div className="max-h-[320px] overflow-y-auto p-3">
+                <div className="space-y-2">
+                  {recent.length === 0 ? <p className="text-sm text-slate-500">Not yet instrumented.</p> : recent.slice(0, 18).map((row) => (
+                    <div key={row.id} className="rounded-[16px] border border-white/6 bg-white/[0.025] px-3 py-2.5">
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0">
+                          <p className="truncate text-sm font-medium text-white">{row.email ?? 'Unknown user'} · {row.event_name}</p>
+                          <p className="mt-0.5 truncate text-[11px] text-slate-400">{row.route ?? '—'} · {row.tab_name ?? row.action_name ?? '—'}</p>
                         </div>
-                        <div className="inline-flex items-center gap-1 rounded-full border border-white/8 bg-slate-950/50 px-3 py-1 text-xs text-slate-400">
-                          <Clock3 className="h-3.5 w-3.5" />
+                        <div className="inline-flex shrink-0 items-center gap-1 rounded-full border border-white/8 bg-slate-950/50 px-2 py-1 text-[10px] text-slate-400">
+                          <Clock3 className="h-3 w-3" />
                           {formatDate(row.created_at)}
                         </div>
                       </div>
@@ -396,38 +365,51 @@ export default async function BetaTestersPage() {
               </div>
             </SectionFrame>
 
-            <SectionFrame
-              eyebrow="Reference roster"
-              title="Tester summary"
-              subtitle="High-level identity and activation context remains available beside the live telemetry feed."
-            >
-              <div className="overflow-x-auto">
-                <table className="min-w-full text-sm">
-                  <thead className="bg-white/[0.03] text-left text-xs uppercase tracking-[0.18em] text-slate-500">
-                    <tr>
-                      <th className="px-5 py-4 font-medium">Email</th>
-                      <th className="px-5 py-4 font-medium">Signed up</th>
-                      <th className="px-5 py-4 font-medium">Last active</th>
-                      <th className="px-5 py-4 font-medium">Sessions</th>
-                      <th className="px-5 py-4 font-medium">Activated</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-white/5">
-                    {testers.map((row) => (
-                      <tr key={row.id} className="transition hover:bg-white/[0.03]">
-                        <td className="px-5 py-4 font-medium text-white">{row.email}</td>
-                        <td className="px-5 py-4 text-slate-300">{formatDate(row.created_at)}</td>
-                        <td className="px-5 py-4 text-slate-300">{formatDate(row.last_sign_in_at ?? row.first_session_at)}</td>
-                        <td className="px-5 py-4 text-slate-300">{row.total_sessions}</td>
-                        <td className="px-5 py-4">
-                          <span className={`inline-flex rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] ${row.total_sessions > 0 ? 'bg-emerald-500/15 text-emerald-200 ring-1 ring-emerald-400/30' : 'bg-slate-700/70 text-slate-200 ring-1 ring-slate-500/40'}`}>
-                            {row.total_sessions > 0 ? 'Active' : 'Pending'}
-                          </span>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+            <SectionFrame eyebrow="Reference roster" title="Tester summary" subtitle="Tighter supporting roster with activation context and quick scan fields." compact>
+              <div className="max-h-[320px] overflow-y-auto p-3">
+                <div className="space-y-2">
+                  {compactSummary.map((row) => (
+                    <div key={row.id} className="rounded-[16px] border border-white/6 bg-white/[0.025] px-3 py-3">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className="truncate text-sm font-medium text-white">{row.email}</p>
+                          <p className="mt-0.5 text-[11px] text-slate-500">Joined {formatDate(row.created_at)}</p>
+                        </div>
+                        <span className={`inline-flex rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] ${row.total_sessions > 0 ? 'bg-emerald-500/15 text-emerald-200 ring-1 ring-emerald-400/30' : 'bg-slate-700/70 text-slate-200 ring-1 ring-slate-500/40'}`}>
+                          {row.total_sessions > 0 ? 'Active' : 'Pending'}
+                        </span>
+                      </div>
+                      <div className="mt-3 grid grid-cols-2 gap-2 text-[11px] text-slate-400">
+                        <div className="rounded-xl border border-white/6 bg-slate-950/40 px-2.5 py-2">
+                          <div className="uppercase tracking-[0.16em] text-slate-500">Last active</div>
+                          <div className="mt-1 text-slate-200">{formatDate(row.last_sign_in_at ?? row.first_session_at)}</div>
+                        </div>
+                        <div className="rounded-xl border border-white/6 bg-slate-950/40 px-2.5 py-2">
+                          <div className="uppercase tracking-[0.16em] text-slate-500">Sessions</div>
+                          <div className="mt-1 text-slate-200">{row.total_sessions}</div>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                  {compactSummary.length === 0 && <p className="text-sm text-slate-500">No tester rows available.</p>}
+                </div>
+              </div>
+            </SectionFrame>
+
+            <SectionFrame eyebrow="Quick interpretation" title="Operator notes" subtitle="Compact narrative summary so the lower half adds context without sprawling." compact>
+              <div className="space-y-2 p-3 text-sm text-slate-300/90">
+                <div className="rounded-[16px] border border-white/6 bg-white/[0.025] px-3 py-3">
+                  <p className="text-[11px] uppercase tracking-[0.18em] text-slate-500">Most visited page</p>
+                  <p className="mt-1 font-medium text-white">{overview?.top_page ?? 'Not yet instrumented'}</p>
+                </div>
+                <div className="rounded-[16px] border border-white/6 bg-white/[0.025] px-3 py-3">
+                  <p className="text-[11px] uppercase tracking-[0.18em] text-slate-500">Most-used action</p>
+                  <p className="mt-1 font-medium text-white">{overview?.top_action ?? 'Not yet instrumented'}</p>
+                </div>
+                <div className="rounded-[16px] border border-white/6 bg-white/[0.025] px-3 py-3">
+                  <p className="text-[11px] uppercase tracking-[0.18em] text-slate-500">Reporting balance</p>
+                  <p className="mt-1 text-slate-300">Tester roster stays dominant while telemetry and summary remain compact supporting modules.</p>
+                </div>
               </div>
             </SectionFrame>
           </section>

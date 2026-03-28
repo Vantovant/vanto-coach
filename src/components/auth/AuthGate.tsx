@@ -8,7 +8,7 @@ import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Separator } from '@/components/ui/separator';
 import { useAuth } from '@/context/AuthContext';
-import { signIn, signUp, resetPassword } from '@/lib/supabase/auth';
+import { resetPassword, resendSignupConfirmation, signIn, signUp, type AuthFeedback } from '@/lib/supabase/auth';
 
 type Mode = 'signin' | 'signup' | 'reset';
 
@@ -44,6 +44,11 @@ function AuthScreen() {
   const [isLoading, setIsLoading] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const [successMessage, setSuccessMessage] = React.useState<string | null>(null);
+  const [pendingConfirmationEmail, setPendingConfirmationEmail] = React.useState<string | null>(null);
+
+  const applyError = (feedback: AuthFeedback) => {
+    setError(feedback.message);
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -54,16 +59,30 @@ function AuthScreen() {
     try {
       if (mode === 'reset') {
         const { error } = await resetPassword(email);
-        if (error) throw error;
+        if (error) {
+          applyError(error);
+          return;
+        }
         setSuccessMessage('Password reset email sent. Check your inbox.');
         setIsLoading(false);
         return;
       }
 
       if (mode === 'signup') {
-        const { error } = await signUp({ email, password, displayName });
-        if (error) throw error;
-        setSuccessMessage('Account created! Check your email to confirm, then sign in.');
+        const { data, error } = await signUp({ email, password, displayName });
+        if (error) {
+          applyError(error);
+          return;
+        }
+
+        const needsConfirmation = !(data && typeof data === 'object' && 'session' in data && data.session);
+        if (needsConfirmation) {
+          setPendingConfirmationEmail(email);
+          setSuccessMessage('Account created. Check your email for the confirmation link before signing in.');
+        } else {
+          setSuccessMessage('Account created successfully.');
+        }
+
         setMode('signin');
         setIsLoading(false);
         return;
@@ -71,11 +90,31 @@ function AuthScreen() {
 
       // signin
       const { error } = await signIn({ email, password });
-      if (error) throw error;
+      if (error) {
+        applyError(error);
+        return;
+      }
       // AuthContext will update and re-render automatically
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Something went wrong';
-      setError(msg);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleResendConfirmation = async () => {
+    if (!pendingConfirmationEmail) return;
+
+    setError(null);
+    setSuccessMessage(null);
+    setIsLoading(true);
+
+    try {
+      const { error } = await resendSignupConfirmation(pendingConfirmationEmail);
+      if (error) {
+        applyError(error);
+        return;
+      }
+
+      setSuccessMessage('Confirmation email sent again. Please check your inbox.');
     } finally {
       setIsLoading(false);
     }
@@ -198,6 +237,22 @@ function AuthScreen() {
                 <p className="text-sm text-green-700 dark:text-green-400 bg-green-50 dark:bg-green-950/30 px-3 py-2 rounded-lg">
                   {successMessage}
                 </p>
+              )}
+
+              {pendingConfirmationEmail && mode === 'signin' && (
+                <div className="rounded-lg border border-border bg-muted/40 px-3 py-3 text-sm">
+                  <p className="text-foreground">Need a fresh confirmation email?</p>
+                  <p className="mt-1 text-muted-foreground">Send another confirmation link to {pendingConfirmationEmail}.</p>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="mt-3 w-full"
+                    onClick={handleResendConfirmation}
+                    disabled={isLoading}
+                  >
+                    {isLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Resend confirmation email'}
+                  </Button>
+                </div>
               )}
 
               <Button type="submit" className="w-full gap-2" disabled={isLoading}>

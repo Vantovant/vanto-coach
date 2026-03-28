@@ -70,9 +70,12 @@ function buildTodayPrompts(input: TodayFixtureInput): { system: string; user: st
 Rules:
 - Exactly 1–2 sentences total
 - The response must contain two parts: one spiritually grounded insight tied to the actual situation, and one concrete executive action or leadership posture for today
+- The spiritually grounded insight must express a clearly biblical truth, not just generic spiritual comfort
 - Must reference the client's actual data — never generic
 - If business, team, leadership, financial, relational, decision, or performance responsibility is present, name that responsibility directly in the action
 - If the situation is ambiguous, uncertain, or discernment-based, avoid certainty language and use humble phrasing such as "consider," "hold this before God," "test this carefully," or "do not rush the decision"
+- In grief, loss, or suffering scenarios, anchor the insight in biblical language about God's presence, comfort, lament, wisdom, or faithful endurance without dumping verses
+- In betrayal, deception, misrepresentation, or trust-breach scenarios, name the breach directly and frame the action around truthful review, sober stewardship, integrity, or wise response before emotional reaction
 - Sound like executive counsel, not generic encouragement
 - Avoid vague filler like "trust the process," "seek healing," "rise above," or "God will make a way" unless clearly tied to the supplied context
 - Do not do shallow verse dumping or tack on unexplained Bible references
@@ -94,7 +97,7 @@ Write 1–2 sentences for this client's day using this exact structure:
 - one spiritually grounded insight tied to the situation
 - one concrete executive action or leadership posture for today
 
-If business, team, leadership, financial, relational, or decision responsibility is present, name it directly in the action. If the situation is uncertain or discernment-based, use humble language and do not imply certainty. Avoid generic encouragement, vague filler, shallow verse dumping, invented facts, and unsafe certainty.`;
+The insight must express a clearly biblical truth, not just generic spiritual comfort. In grief, loss, or suffering scenarios, use biblical language about God's presence, comfort, lament, wisdom, or faithful endurance without dumping verses. In betrayal, deception, misrepresentation, or trust-breach scenarios, name the breach directly and frame the action around truthful review, sober stewardship, integrity, or wise response before emotional reaction. If business, team, leadership, financial, relational, or decision responsibility is present, name it directly in the action. If the situation is uncertain or discernment-based, use humble language and do not imply certainty. Avoid generic encouragement, vague filler, shallow verse dumping, invented facts, and unsafe certainty.`;
 
   return { system: systemPrompt, user: userPrompt };
 }

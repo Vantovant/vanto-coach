@@ -46,3 +46,4 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 # .env.local # Removed by Orchids to allow .env files
+.env.local

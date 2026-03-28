@@ -19,6 +19,7 @@ import {
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
+import { trackBetaEvent } from '@/lib/supabase/analytics';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -56,6 +57,9 @@ import { RelatedVersesStudy } from '@/components/bible/RelatedVersesStudy';
 import { toast } from 'sonner';
 
 export function ScriptureTab() {
+  React.useEffect(() => {
+    trackBetaEvent({ eventName: 'scripture_viewed', route: '/coach', tabName: 'scripture' });
+  }, []);
   const searchParams = useSearchParams();
 
   // Get navigation params from URL

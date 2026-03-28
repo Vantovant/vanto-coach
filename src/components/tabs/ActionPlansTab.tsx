@@ -42,8 +42,12 @@ import { getActionItems, updateActionItemStatus, bulkUpdateActionItemStatus } fr
 import { useAuth } from '@/context/AuthContext';
 import { toast } from 'sonner';
 import { captureError, captureMessage } from '@/lib/monitoring';
+import { trackBetaEvent } from '@/lib/supabase/analytics';
 
 export function ActionPlansTab() {
+  React.useEffect(() => {
+    trackBetaEvent({ eventName: 'action_plans_viewed', route: '/coach', tabName: 'action-plans' });
+  }, []);
   const { user } = useAuth();
   const [activeTab, setActiveTab] = React.useState<'pending' | 'approved' | 'all'>('pending');
   const [selectedItems, setSelectedItems] = React.useState<Set<string>>(new Set());
@@ -266,7 +270,7 @@ export function ActionPlansTab() {
               className="pl-9"
             />
           </div>
-          <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as typeof activeTab)}>
+          <Tabs value={activeTab} onValueChange={(v) => { setActiveTab(v as typeof activeTab); trackBetaEvent({ eventName: 'button_click', route: '/coach', tabName: 'action-plans', actionName: `action_filter_${v}` }); }}>
             <TabsList>
               <TabsTrigger value="pending" className="gap-2">
                 Pending

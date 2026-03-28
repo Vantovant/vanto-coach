@@ -1,17 +1,29 @@
 "use client";
 
-import { useEffect } from "react";
+import { Suspense, useEffect } from "react";
+import { usePathname, useSearchParams } from 'next/navigation';
 import { AuthProvider } from "@/context/AuthContext";
 import { Toaster } from "@/components/ui/sonner";
+import { trackBetaEvent } from '@/lib/supabase/analytics';
+
+function AnalyticsBoot() {
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+
+  useEffect(() => {
+    const route = `${pathname}${searchParams.toString() ? `?${searchParams.toString()}` : ''}`;
+    trackBetaEvent({ eventName: 'page_view', route });
+  }, [pathname, searchParams]);
+
+  return null;
+}
 
 export function ClientBody({
   children,
 }: {
   children: React.ReactNode;
 }) {
-  // Remove any extension-added classes during hydration
   useEffect(() => {
-    // This runs only on the client after hydration
     document.body.className = "antialiased";
   }, []);
 
@@ -22,6 +34,7 @@ export function ClientBody({
 
   return (
     <AuthProvider>
+      <Suspense fallback={null}><AnalyticsBoot /></Suspense>
       <div className="antialiased">{children}</div>
       <Toaster position="bottom-right" richColors closeButton />
     </AuthProvider>

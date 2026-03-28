@@ -9,6 +9,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Separator } from '@/components/ui/separator';
 import { useAuth } from '@/context/AuthContext';
 import { resetPassword, resendSignupConfirmation, signIn, signUp, type AuthFeedback } from '@/lib/supabase/auth';
+import { trackBetaEvent } from '@/lib/supabase/analytics';
 
 type Mode = 'signin' | 'signup' | 'reset';
 
@@ -40,6 +41,7 @@ function AuthScreen() {
   const [email, setEmail] = React.useState('');
   const [password, setPassword] = React.useState('');
   const [displayName, setDisplayName] = React.useState('');
+  const [inviteCode, setInviteCode] = React.useState('');
   const [showPassword, setShowPassword] = React.useState(false);
   const [isLoading, setIsLoading] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
@@ -60,6 +62,7 @@ function AuthScreen() {
       if (mode === 'reset') {
         const { error } = await resetPassword(email);
         if (error) {
+          await trackBetaEvent({ eventName: 'signup_failed', route: '/coach', actionName: 'signup_submit', metadata: { code: error.code } });
           applyError(error);
           return;
         }
@@ -69,12 +72,15 @@ function AuthScreen() {
       }
 
       if (mode === 'signup') {
-        const { data, error } = await signUp({ email, password, displayName });
+        await trackBetaEvent({ eventName: 'signup_started', route: '/coach', actionName: 'signup_submit' });
+        const { data, error } = await signUp({ email, password, displayName, inviteCode });
         if (error) {
+          await trackBetaEvent({ eventName: 'signup_failed', route: '/coach', actionName: 'signup_submit', metadata: { code: error.code } });
           applyError(error);
           return;
         }
 
+        await trackBetaEvent({ eventName: 'signup_succeeded', route: '/coach', actionName: 'signup_submit' });
         const needsConfirmation = !(data && typeof data === 'object' && 'session' in data && data.session);
         if (needsConfirmation) {
           setPendingConfirmationEmail(email);
@@ -180,6 +186,20 @@ function AuthScreen() {
                       autoComplete="name"
                     />
                   </div>
+                </div>
+              )}
+
+              {mode === 'signup' && (
+                <div className="space-y-1.5">
+                  <Label htmlFor="inviteCode">Invite code</Label>
+                  <Input
+                    id="inviteCode"
+                    placeholder="Enter your beta invite code"
+                    value={inviteCode}
+                    onChange={e => setInviteCode(e.target.value.toUpperCase())}
+                    required
+                    autoComplete="off"
+                  />
                 </div>
               )}
 

@@ -42,6 +42,7 @@ import {
 import type { CoachInsight, GrowthArea, LifeBalanceScore } from '@/types/coach';
 import { cn } from '@/lib/utils';
 import { getRecentSessions, createInsightAction, getPrayerPoints } from '@/lib/supabase/db';
+import { trackBetaEvent } from '@/lib/supabase/analytics';
 import { useAuth } from '@/context/AuthContext';
 import { MOOD_SENTIMENTS } from '@/lib/ai/config';
 import { toast } from 'sonner';
@@ -99,6 +100,9 @@ function computeLifeBalance(areaCounts: Record<string, number>, hasAnySessions: 
 }
 
 export function InsightsTab() {
+  React.useEffect(() => {
+    trackBetaEvent({ eventName: 'insights_viewed', route: '/coach', tabName: 'insights' });
+  }, []);
   const { user } = useAuth();
   const router = useRouter();
   const [period, setPeriod] = React.useState<'week' | 'month' | 'quarter'>('week');

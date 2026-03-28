@@ -15,6 +15,7 @@ export interface AuthCredentials {
 
 export interface SignUpInput extends AuthCredentials {
   displayName?: string;
+  inviteCode?: string;
 }
 
 export interface AuthFeedback {
@@ -111,8 +112,61 @@ export function mapAuthError(error: unknown, context: string): AuthFeedback {
   };
 }
 
-export async function signUp({ email, password, displayName }: SignUpInput): Promise<AuthActionResult> {
+export async function signUp({ email, password, displayName, inviteCode }: SignUpInput): Promise<AuthActionResult> {
   const supabase = createClient();
+
+  if (!inviteCode || inviteCode.trim() === '') {
+    return {
+      data: null,
+      error: {
+        code: 'invite_code_required',
+        title: 'Invite code required',
+        message: 'Enter a valid invite code to join the beta.',
+      },
+    };
+  }
+
+  const { data: inviteValidation, error: inviteError } = await supabase.rpc('validate_beta_invite_code', {
+    candidate_code: inviteCode.trim(),
+  });
+
+  if (inviteError) {
+    captureMessage(`invite validation failed: ${inviteError.message}`, 'warning', {
+      context: 'auth:validateInviteCode',
+      supabaseCode: inviteError.code,
+    });
+
+    return {
+      data: null,
+      error: {
+        code: 'invite_validation_failed',
+        title: 'Invite code unavailable',
+        message: 'We could not validate that invite code right now. Please try again.',
+      },
+    };
+  }
+
+  const inviteRow = Array.isArray(inviteValidation) ? inviteValidation[0] : inviteValidation;
+  if (!inviteRow?.is_valid) {
+    const reason = inviteRow?.reason ?? 'invalid_code';
+    const message = reason === 'expired_code'
+      ? 'That invite code has expired.'
+      : reason === 'code_already_used'
+      ? 'That invite code has already been used.'
+      : reason === 'inactive_code'
+      ? 'That invite code is no longer active.'
+      : 'That invite code is invalid.';
+
+    return {
+      data: null,
+      error: {
+        code: reason,
+        title: 'Invite code invalid',
+        message,
+      },
+    };
+  }
+
   const { data, error } = await supabase.auth.signUp({
     email,
     password,
@@ -123,6 +177,25 @@ export async function signUp({ email, password, displayName }: SignUpInput): Pro
 
   if (error) {
     return { data: null, error: mapAuthError(error, 'auth:signUp') };
+  }
+
+  try {
+    const userId = data?.user?.id ?? null;
+    const userEmail = data?.user?.email ?? email;
+    const inviteId = inviteRow?.id ?? null;
+
+    if (inviteId && userId) {
+      await supabase.rpc('consume_beta_invite_code', {
+        invite_code_id: inviteId,
+        signup_user_id: userId,
+        signup_email: userEmail,
+      });
+    }
+  } catch (consumeError) {
+    captureMessage('invite code consume failed', 'warning', {
+      context: 'auth:consumeInviteCode',
+      error: consumeError instanceof Error ? consumeError.message : String(consumeError),
+    });
   }
 
   return { data, error: null };

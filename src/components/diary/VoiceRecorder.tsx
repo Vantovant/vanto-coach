@@ -35,6 +35,7 @@ import { useTranscriptProcessor, type ProcessedTranscript, type ProcessingStatus
 import { ScriptureList } from '@/components/bible/ScriptureCard';
 import fixWebmDuration from 'fix-webm-duration';
 import { toast } from 'sonner';
+import { trackBetaEvent } from '@/lib/supabase/analytics';
 import { captureError, captureMessage } from '@/lib/monitoring';
 
 // Extended result type that includes transcript and AI processing
@@ -188,6 +189,7 @@ export function VoiceRecorder({ onComplete, onCancel }: VoiceRecorderProps) {
         if (data.success && data.transcript && data.transcript.trim().length > 0) {
           setEditedTranscript(data.transcript);
           processTranscript(data.transcript);
+          trackBetaEvent({ eventName: 'diary_processed', route: '/coach', tabName: 'diary', actionName: 'audio_transcribed' });
           toast.success('Audio transcribed', { description: 'Transcript captured from your recording.' });
         } else if (data.success) {
           toast.warning('No speech detected', {
@@ -249,6 +251,7 @@ export function VoiceRecorder({ onComplete, onCancel }: VoiceRecorderProps) {
 
   // Combined start: audio recording + speech recognition
   const handleStartRecording = async () => {
+    await trackBetaEvent({ eventName: 'diary_record_started', route: '/coach', tabName: 'diary', actionName: 'start_recording' });
     resetTranscript();
     resetProcessor();
     setEditedTranscript('');

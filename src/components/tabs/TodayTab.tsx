@@ -35,6 +35,7 @@ import { buildScriptureUrlFromReference, buildStudyUrl } from '@/lib/bible/navig
 import { cn } from '@/lib/utils';
 import { useRouter } from 'next/navigation';
 import { getActionItems, getPrayerPoints, getRecentSessions, type PrayerPointRow } from '@/lib/supabase/db';
+import { trackBetaEvent } from '@/lib/supabase/analytics';
 import type { CoachActionItem, CoachSession } from '@/types/coach';
 import { useAuth } from '@/context/AuthContext';
 import { toast } from 'sonner';
@@ -219,6 +220,9 @@ function deriveBriefing(
 }
 
 export function TodayTab() {
+  React.useEffect(() => {
+    trackBetaEvent({ eventName: 'today_viewed', route: '/coach', tabName: 'today' });
+  }, []);
   const { user } = useAuth();
   const [formattedDate, setFormattedDate] = React.useState('');
   const [greeting, setGreeting] = React.useState('');

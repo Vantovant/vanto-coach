@@ -20,7 +20,6 @@ export async function createClient() {
               cookieStore.set(name, value, options);
             }
           } catch {
-            // setAll called from Server Component — can be ignored
           }
         },
       },
@@ -28,7 +27,7 @@ export async function createClient() {
   );
 }
 
-export async function requireAdminAccess() {
+export async function isAdminUser() {
   const supabase = await createClient();
   const { data: { user }, error: userError } = await supabase.auth.getUser();
 
@@ -45,4 +44,8 @@ export async function requireAdminAccess() {
   }
 
   return { authorized: true as const, supabase, user };
+}
+
+export async function requireAdminAccess() {
+  return isAdminUser();
 }

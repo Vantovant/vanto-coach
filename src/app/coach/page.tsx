@@ -1,6 +1,6 @@
 'use client';
 
-import { Suspense } from 'react';
+import { Suspense, useEffect } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { CoachLayout } from '@/components/layout/CoachLayout';
 import { TodayTab } from '@/components/tabs/TodayTab';
@@ -13,10 +13,20 @@ import { SettingsTab } from '@/components/tabs/SettingsTab';
 import type { CoachTab } from '@/types/coach';
 import { Skeleton } from '@/components/ui/skeleton';
 import { AuthGate } from '@/components/auth/AuthGate';
+import { trackBetaEvent } from '@/lib/supabase/analytics';
 
 function CoachContent() {
   const searchParams = useSearchParams();
   const tab = (searchParams.get('tab') as CoachTab) || 'today';
+
+  useEffect(() => {
+    trackBetaEvent({ eventName: 'tab_view', route: '/coach', tabName: tab });
+
+    if (tab === 'today') trackBetaEvent({ eventName: 'today_viewed', route: '/coach', tabName: tab });
+    if (tab === 'insights') trackBetaEvent({ eventName: 'insights_viewed', route: '/coach', tabName: tab });
+    if (tab === 'action-plans') trackBetaEvent({ eventName: 'action_plans_viewed', route: '/coach', tabName: tab });
+    if (tab === 'scripture') trackBetaEvent({ eventName: 'scripture_viewed', route: '/coach', tabName: tab });
+  }, [tab]);
 
   return (
     <>

@@ -114,14 +114,97 @@ export function VoiceRecorder({ onComplete, onCancel }: VoiceRecorderProps) {
   const [isEditingTranscript, setIsEditingTranscript] = React.useState(false);
 
   // ── Audio-blob transcription fallback ───────────────────────────────────────
-  // Fires when recording completes but the Web Speech API produced no text
-  // (common on iOS Safari and any mobile browser without reliable continuous
-  // speech recognition). Sends the raw MediaRecorder blob to /api/ai/transcribe
-  // (Whisper-1) and feeds the result back into the normal processing chain.
+  // Fires when recording completes and uses the recorded audio as the
+  // authoritative transcription source. This same path is reused for
+  // user-triggered retry without forcing a re-record.
   const audioTranscribedRef = React.useRef(false);
   const [isAudioTranscribing, setIsAudioTranscribing] = React.useState(false);
   const [transcriptionStatus, setTranscriptionStatus] = React.useState<'idle' | 'transcribing' | 'failed' | 'succeeded'>('idle');
   const [transcriptionError, setTranscriptionError] = React.useState<string | null>(null);
+
+  const transcribeAudioBlob = React.useCallback(async (blob: Blob, options?: { isRetry?: boolean }) => {
+    setIsAudioTranscribing(true);
+    setTranscriptionStatus('transcribing');
+    setTranscriptionError(null);
+
+    try {
+      const mimeType = blob.type || 'audio/webm';
+      const form = new FormData();
+      form.append('audio', blob);
+      form.append('mimeType', mimeType);
+
+      const response = await fetch('/api/ai/transcribe', {
+        method: 'POST',
+        body: form,
+      });
+
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        const message = typeof data.error === 'string' && data.error.trim().length > 0
+          ? data.error
+          : 'Could not transcribe audio. You can type your transcript manually.';
+
+        setTranscriptionStatus('failed');
+        setTranscriptionError(message);
+
+        if (data.missing_env) {
+          captureMessage(data.error ?? 'Audio transcription unavailable', 'warning', {
+            context: 'diary:audioTranscribe',
+            missing_env: data.missing_env,
+            isRetry: options?.isRetry ?? false,
+          });
+          toast.warning('Auto-transcription unavailable', {
+            description: 'You can type your transcript manually below.',
+          });
+        } else {
+          toast.error('Transcription failed', {
+            description: message,
+          });
+        }
+        return;
+      }
+
+      const data = await response.json();
+      if (data.success && data.transcript && data.transcript.trim().length > 0) {
+        setTranscriptionStatus('succeeded');
+        setTranscriptionError(null);
+        setEditedTranscript(data.transcript);
+        processTranscript(data.transcript);
+        trackBetaEvent({
+          eventName: 'diary_processed',
+          route: '/coach',
+          tabName: 'diary',
+          actionName: options?.isRetry ? 'audio_transcribed_retry' : 'audio_transcribed',
+        });
+        toast.success(options?.isRetry ? 'Transcription retried' : 'Audio transcribed', {
+          description: options?.isRetry
+            ? 'Transcript captured from your existing recording.'
+            : 'Transcript captured from your recording.',
+        });
+      } else if (data.success) {
+        setTranscriptionStatus('failed');
+        setTranscriptionError('No words were found in the recording. You can add a transcript manually.');
+        toast.warning('No speech detected', {
+          description: 'No words were found in the recording. You can add a transcript manually.',
+        });
+      }
+    } catch (err) {
+      captureError(err, { context: 'diary:audioTranscribe', isRetry: options?.isRetry ?? false });
+      setTranscriptionStatus('failed');
+      setTranscriptionError('Could not transcribe audio right now. You can add your transcript manually and continue.');
+      toast.error('Transcription failed', {
+        description: 'Could not transcribe audio right now. You can add your transcript manually and continue.',
+      });
+    } finally {
+      setIsAudioTranscribing(false);
+    }
+  }, [processTranscript]);
+
+  const handleRetryTranscription = React.useCallback(() => {
+    if (!audioBlob || isAudioTranscribing) return;
+    audioTranscribedRef.current = true;
+    void transcribeAudioBlob(audioBlob, { isRetry: true });
+  }, [audioBlob, isAudioTranscribing, transcribeAudioBlob]);
 
   // Reset the guard on each new recording so the effect can fire again
   React.useEffect(() => {
@@ -140,76 +223,8 @@ export function VoiceRecorder({ onComplete, onCancel }: VoiceRecorderProps) {
     ) return;
 
     audioTranscribedRef.current = true;
-
-    const doAudioTranscription = async () => {
-      setIsAudioTranscribing(true);
-      setTranscriptionStatus('transcribing');
-      setTranscriptionError(null);
-      try {
-        const mimeType = audioBlob.type || 'audio/webm';
-        const form = new FormData();
-        form.append('audio', audioBlob);
-        form.append('mimeType', mimeType);
-
-        const response = await fetch('/api/ai/transcribe', {
-          method: 'POST',
-          body: form,
-        });
-
-        if (!response.ok) {
-          const data = await response.json().catch(() => ({}));
-          const message = typeof data.error === 'string' && data.error.trim().length > 0
-            ? data.error
-            : 'Could not transcribe audio. You can type your transcript manually.';
-
-          setTranscriptionStatus('failed');
-          setTranscriptionError(message);
-
-          if (data.missing_env) {
-            captureMessage(data.error ?? 'Audio transcription unavailable', 'warning', {
-              context: 'diary:audioTranscribe',
-              missing_env: data.missing_env,
-            });
-            toast.warning('Auto-transcription unavailable', {
-              description: 'You can type your transcript manually below.',
-            });
-          } else {
-            toast.error('Transcription failed', {
-              description: message,
-            });
-          }
-          return;
-        }
-
-        const data = await response.json();
-        if (data.success && data.transcript && data.transcript.trim().length > 0) {
-          setTranscriptionStatus('succeeded');
-          setTranscriptionError(null);
-          setEditedTranscript(data.transcript);
-          processTranscript(data.transcript);
-          trackBetaEvent({ eventName: 'diary_processed', route: '/coach', tabName: 'diary', actionName: 'audio_transcribed' });
-          toast.success('Audio transcribed', { description: 'Transcript captured from your recording.' });
-        } else if (data.success) {
-          setTranscriptionStatus('failed');
-          setTranscriptionError('No words were found in the recording. You can add a transcript manually.');
-          toast.warning('No speech detected', {
-            description: 'No words were found in the recording. You can add a transcript manually.',
-          });
-        }
-      } catch (err) {
-        captureError(err, { context: 'diary:audioTranscribe' });
-        setTranscriptionStatus('failed');
-        setTranscriptionError('Could not transcribe audio right now. You can add your transcript manually and continue.');
-        toast.error('Transcription failed', {
-          description: 'Could not transcribe audio right now. You can add your transcript manually and continue.',
-        });
-      } finally {
-        setIsAudioTranscribing(false);
-      }
-    };
-
-    doAudioTranscription();
-  }, [recordingStatus, audioBlob, processTranscript]);
+    void transcribeAudioBlob(audioBlob);
+  }, [audioBlob, recordingStatus, transcribeAudioBlob]);
 
   React.useEffect(() => {
     const audio = audioRef.current;
@@ -618,6 +633,16 @@ export function VoiceRecorder({ onComplete, onCancel }: VoiceRecorderProps) {
                       {transcriptionError ?? 'Could not transcribe audio. You can add your transcript manually.'}
                     </p>
                   </div>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="shrink-0 text-xs gap-1"
+                    onClick={handleRetryTranscription}
+                    disabled={!audioBlob || isAudioTranscribing}
+                  >
+                    <RefreshCw className={cn('h-3 w-3', isAudioTranscribing && 'animate-spin')} />
+                    Retry transcription
+                  </Button>
                 </div>
               )}
 

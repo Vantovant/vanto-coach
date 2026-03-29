@@ -58,12 +58,13 @@ interface VoiceRecorderProps {
 
 export function VoiceRecorder({ onComplete, onCancel }: VoiceRecorderProps) {
   const {
-    status: recordingStatus,
-    duration,
+    recordingStatus,
+    durationSeconds,
     audioLevel,
     audioUrl,
     audioBlob,
     error: recordingError,
+    supportedMimeType,
     startRecording,
     pauseRecording,
     resumeRecording,
@@ -317,9 +318,9 @@ export function VoiceRecorder({ onComplete, onCancel }: VoiceRecorderProps) {
 
     let finalBlob: Blob = audioBlob;
     let finalUrl: string = audioUrl;
-    if (audioBlob.type.includes('webm') && duration > 0) {
+    if (audioBlob.type.includes('webm') && durationSeconds > 0) {
       try {
-        const fixed: Blob = await fixWebmDuration(audioBlob, duration * 1000, { logger: false });
+        const fixed: Blob = await fixWebmDuration(audioBlob, durationSeconds * 1000, { logger: false });
         const fixedUrl = URL.createObjectURL(fixed);
         finalBlob = fixed;
         finalUrl = fixedUrl;
@@ -335,7 +336,7 @@ export function VoiceRecorder({ onComplete, onCancel }: VoiceRecorderProps) {
       onComplete({
         audioBlob: finalBlob,
         audioUrl: finalUrl,
-        duration,
+        duration: durationSeconds,
         mimeType: finalBlob.type,
         transcript: editedTranscript || transcript,
         cleanedTranscript: processedResult?.cleanedTranscript,
@@ -496,7 +497,7 @@ export function VoiceRecorder({ onComplete, onCancel }: VoiceRecorderProps) {
             </div>
 
             <div className="mb-6">
-              <div className="text-4xl font-mono font-semibold mb-2">{formatTime(duration)}</div>
+              <div className="text-4xl font-mono font-semibold mb-2">{formatTime(durationSeconds)}</div>
               <Badge className={cn('text-xs', transcriptStatus.color)}>
                 {transcriptStatus.icon}
                 {transcriptStatus.label}
@@ -562,7 +563,7 @@ export function VoiceRecorder({ onComplete, onCancel }: VoiceRecorderProps) {
 
             <h3 className="text-lg font-semibold mb-1">Recording Complete</h3>
             <p className="text-sm text-muted-foreground mb-6">
-              {formatTime(duration)} recorded
+              {formatTime(durationSeconds)} recorded
             </p>
 
             <div className="w-full max-w-sm space-y-4 mb-6">
@@ -577,8 +578,8 @@ export function VoiceRecorder({ onComplete, onCancel }: VoiceRecorderProps) {
                 <div className="flex-1">
                   <Progress value={playbackProgress} className="h-2" />
                   <div className="flex items-center justify-between mt-1.5 text-xs text-muted-foreground">
-                    <span>{formatTime(Math.floor((playbackProgress / 100) * duration))}</span>
-                    <span>{formatTime(duration)}</span>
+                    <span>{formatTime(Math.floor((playbackProgress / 100) * durationSeconds))}</span>
+                    <span>{formatTime(durationSeconds)}</span>
                   </div>
                 </div>
                 <Volume2 className="h-4 w-4 text-muted-foreground shrink-0" />

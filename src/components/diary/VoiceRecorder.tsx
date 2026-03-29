@@ -65,6 +65,13 @@ type PersistedAudioRecovery = {
 
 const RECOVERY_STORAGE_KEY = 'vanto-coach:pending-audio-recovery';
 
+type PreparedTranscriptionAudio = {
+  blob: Blob;
+  mimeType: string;
+  filename: string;
+  normalizedFromMimeType?: string;
+};
+
 type TranscribeRouteResponse = {
   success?: boolean;
   transcript?: string;
@@ -86,6 +93,88 @@ function getExtFromMimeType(mimeType: string): string {
   if (mimeType.includes('mpeg') || mimeType.includes('mp3')) return 'mp3';
   if (mimeType.includes('wav')) return 'wav';
   return 'webm';
+}
+
+function shouldNormalizeForTranscription(mimeType: string): boolean {
+  const normalizedMimeType = mimeType.toLowerCase();
+  return normalizedMimeType.includes('webm') || normalizedMimeType.includes('opus');
+}
+
+function encodeWavFromAudioBuffer(audioBuffer: AudioBuffer): Blob {
+  const channelCount = audioBuffer.numberOfChannels;
+  const sampleRate = audioBuffer.sampleRate;
+  const frameCount = audioBuffer.length;
+  const bitsPerSample = 16;
+  const bytesPerSample = bitsPerSample / 8;
+  const blockAlign = channelCount * bytesPerSample;
+  const byteRate = sampleRate * blockAlign;
+  const dataSize = frameCount * blockAlign;
+  const buffer = new ArrayBuffer(44 + dataSize);
+  const view = new DataView(buffer);
+
+  const writeString = (offset: number, value: string) => {
+    for (let i = 0; i < value.length; i += 1) {
+      view.setUint8(offset + i, value.charCodeAt(i));
+    }
+  };
+
+  writeString(0, 'RIFF');
+  view.setUint32(4, 36 + dataSize, true);
+  writeString(8, 'WAVE');
+  writeString(12, 'fmt ');
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, channelCount, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, byteRate, true);
+  view.setUint16(32, blockAlign, true);
+  view.setUint16(34, bitsPerSample, true);
+  writeString(36, 'data');
+  view.setUint32(40, dataSize, true);
+
+  const channelData = Array.from({ length: channelCount }, (_, channelIndex) => audioBuffer.getChannelData(channelIndex));
+  let offset = 44;
+
+  for (let frameIndex = 0; frameIndex < frameCount; frameIndex += 1) {
+    for (let channelIndex = 0; channelIndex < channelCount; channelIndex += 1) {
+      const sample = Math.max(-1, Math.min(1, channelData[channelIndex][frameIndex] ?? 0));
+      const intSample = sample < 0 ? sample * 0x8000 : sample * 0x7fff;
+      view.setInt16(offset, intSample, true);
+      offset += bytesPerSample;
+    }
+  }
+
+  return new Blob([buffer], { type: 'audio/wav' });
+}
+
+async function normalizeAudioForTranscription(blob: Blob, mimeType: string): Promise<PreparedTranscriptionAudio> {
+  const ext = getExtFromMimeType(mimeType);
+  const filename = `recording.${ext}`;
+
+  if (!shouldNormalizeForTranscription(mimeType) || typeof window === 'undefined') {
+    return { blob, mimeType, filename };
+  }
+
+  const AudioContextConstructor = window.AudioContext || (window as Window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+  if (!AudioContextConstructor) {
+    return { blob, mimeType, filename };
+  }
+
+  const audioContext = new AudioContextConstructor();
+  try {
+    const arrayBuffer = await blob.arrayBuffer();
+    const decodedAudio = await audioContext.decodeAudioData(arrayBuffer.slice(0));
+    const wavBlob = encodeWavFromAudioBuffer(decodedAudio);
+
+    return {
+      blob: wavBlob,
+      mimeType: 'audio/wav',
+      filename: 'recording.wav',
+      normalizedFromMimeType: mimeType,
+    };
+  } finally {
+    await audioContext.close().catch(() => undefined);
+  }
 }
 
 function readRecoveryState(): PersistedAudioRecovery | null {
@@ -204,12 +293,20 @@ export function VoiceRecorder({ onComplete, onCancel }: VoiceRecorderProps) {
     setTranscriptionError(null);
 
     try {
-      const mimeType = blob.type || persistedAudioMimeType || 'audio/webm';
-      const ext = getExtFromMimeType(mimeType);
-      const filename = `recording.${ext}`;
+      const sourceMimeType = blob.type || persistedAudioMimeType || 'audio/webm';
+      const preparedAudio = await normalizeAudioForTranscription(blob, sourceMimeType);
       const form = new FormData();
-      form.append('audio', blob, filename);
-      form.append('mimeType', mimeType);
+      form.append('audio', preparedAudio.blob, preparedAudio.filename);
+      form.append('mimeType', preparedAudio.mimeType);
+
+      if (preparedAudio.normalizedFromMimeType) {
+        captureMessage('Normalized audio for transcription upload', 'info', {
+          context: 'diary:audioTranscribe',
+          normalizedFromMimeType: preparedAudio.normalizedFromMimeType,
+          normalizedToMimeType: preparedAudio.mimeType,
+          isRetry: options?.isRetry ?? false,
+        });
+      }
 
       let response: Response;
       try {

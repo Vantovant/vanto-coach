@@ -65,13 +65,6 @@ type PersistedAudioRecovery = {
 
 const RECOVERY_STORAGE_KEY = 'vanto-coach:pending-audio-recovery';
 
-type PreparedTranscriptionAudio = {
-  blob: Blob;
-  mimeType: string;
-  filename: string;
-  normalizedFromMimeType?: string;
-};
-
 type TranscribeRouteResponse = {
   success?: boolean;
   transcript?: string;
@@ -83,99 +76,18 @@ type TranscribeRouteResponse = {
     submittedMimeType?: string;
     filename?: string;
     extension?: string;
+    fileSize?: number;
   };
   missing_env?: string;
 };
 
-function getExtFromMimeType(mimeType: string): string {
-  if (mimeType.includes('mp4') || mimeType.includes('m4a')) return 'mp4';
-  if (mimeType.includes('ogg')) return 'ogg';
-  if (mimeType.includes('mpeg') || mimeType.includes('mp3')) return 'mp3';
-  if (mimeType.includes('wav')) return 'wav';
-  return 'webm';
-}
-
-function shouldNormalizeForTranscription(mimeType: string): boolean {
-  const normalizedMimeType = mimeType.toLowerCase();
-  return normalizedMimeType.includes('webm') || normalizedMimeType.includes('opus');
-}
-
-function encodeWavFromAudioBuffer(audioBuffer: AudioBuffer): Blob {
-  const channelCount = audioBuffer.numberOfChannels;
-  const sampleRate = audioBuffer.sampleRate;
-  const frameCount = audioBuffer.length;
-  const bitsPerSample = 16;
-  const bytesPerSample = bitsPerSample / 8;
-  const blockAlign = channelCount * bytesPerSample;
-  const byteRate = sampleRate * blockAlign;
-  const dataSize = frameCount * blockAlign;
-  const buffer = new ArrayBuffer(44 + dataSize);
-  const view = new DataView(buffer);
-
-  const writeString = (offset: number, value: string) => {
-    for (let i = 0; i < value.length; i += 1) {
-      view.setUint8(offset + i, value.charCodeAt(i));
-    }
-  };
-
-  writeString(0, 'RIFF');
-  view.setUint32(4, 36 + dataSize, true);
-  writeString(8, 'WAVE');
-  writeString(12, 'fmt ');
-  view.setUint32(16, 16, true);
-  view.setUint16(20, 1, true);
-  view.setUint16(22, channelCount, true);
-  view.setUint32(24, sampleRate, true);
-  view.setUint32(28, byteRate, true);
-  view.setUint16(32, blockAlign, true);
-  view.setUint16(34, bitsPerSample, true);
-  writeString(36, 'data');
-  view.setUint32(40, dataSize, true);
-
-  const channelData = Array.from({ length: channelCount }, (_, channelIndex) => audioBuffer.getChannelData(channelIndex));
-  let offset = 44;
-
-  for (let frameIndex = 0; frameIndex < frameCount; frameIndex += 1) {
-    for (let channelIndex = 0; channelIndex < channelCount; channelIndex += 1) {
-      const sample = Math.max(-1, Math.min(1, channelData[channelIndex][frameIndex] ?? 0));
-      const intSample = sample < 0 ? sample * 0x8000 : sample * 0x7fff;
-      view.setInt16(offset, intSample, true);
-      offset += bytesPerSample;
-    }
-  }
-
-  return new Blob([buffer], { type: 'audio/wav' });
-}
-
-async function normalizeAudioForTranscription(blob: Blob, mimeType: string): Promise<PreparedTranscriptionAudio> {
-  const ext = getExtFromMimeType(mimeType);
-  const filename = `recording.${ext}`;
-
-  if (!shouldNormalizeForTranscription(mimeType) || typeof window === 'undefined') {
-    return { blob, mimeType, filename };
-  }
-
-  const AudioContextConstructor = window.AudioContext || (window as Window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
-  if (!AudioContextConstructor) {
-    return { blob, mimeType, filename };
-  }
-
-  const audioContext = new AudioContextConstructor();
-  try {
-    const arrayBuffer = await blob.arrayBuffer();
-    const decodedAudio = await audioContext.decodeAudioData(arrayBuffer.slice(0));
-    const wavBlob = encodeWavFromAudioBuffer(decodedAudio);
-
-    return {
-      blob: wavBlob,
-      mimeType: 'audio/wav',
-      filename: 'recording.wav',
-      normalizedFromMimeType: mimeType,
-    };
-  } finally {
-    await audioContext.close().catch(() => undefined);
-  }
-}
+type TranscriptionDebugDetails = {
+  errorCode?: string;
+  submittedMimeType?: string;
+  filename?: string;
+  fileSize?: number;
+  normalizationOutcome?: 'produced_wav' | 'fell_back';
+};
 
 function readRecoveryState(): PersistedAudioRecovery | null {
   if (typeof window === 'undefined') return null;
@@ -216,6 +128,7 @@ export function VoiceRecorder({ onComplete, onCancel }: VoiceRecorderProps) {
     previewStatus,
     supported: isSpeechSupported,
     interimText,
+    committedText,
     error: speechError,
     startPreview,
     stopPreview,
@@ -248,9 +161,7 @@ export function VoiceRecorder({ onComplete, onCancel }: VoiceRecorderProps) {
   const [showProcessedView, setShowProcessedView] = React.useState(false);
   const [editedTranscript, setEditedTranscript] = React.useState('');
   const [isEditingTranscript, setIsEditingTranscript] = React.useState(false);
-  const audioTranscribedRef = React.useRef(false);
-  const [isAudioTranscribing, setIsAudioTranscribing] = React.useState(false);
-  const [transcriptionStatus, setTranscriptionStatus] = React.useState<'idle' | 'transcribing' | 'failed' | 'succeeded'>('idle');
+  const [transcriptionStatus, setTranscriptionStatus] = React.useState<'idle' | 'capturing' | 'failed' | 'succeeded'>('idle');
   const [transcriptionError, setTranscriptionError] = React.useState<string | null>(null);
   const [persistedAudioPath, setPersistedAudioPath] = React.useState<string | null>(null);
   const [persistedAudioMimeType, setPersistedAudioMimeType] = React.useState<string | null>(null);
@@ -287,153 +198,12 @@ export function VoiceRecorder({ onComplete, onCancel }: VoiceRecorderProps) {
     }
   }, [isPersistingAudio, persistedAudioPath]);
 
-  const transcribeAudioBlob = React.useCallback(async (blob: Blob, options?: { isRetry?: boolean }) => {
-    setIsAudioTranscribing(true);
-    setTranscriptionStatus('transcribing');
-    setTranscriptionError(null);
-
-    try {
-      const sourceMimeType = blob.type || persistedAudioMimeType || 'audio/webm';
-      const preparedAudio = await normalizeAudioForTranscription(blob, sourceMimeType);
-      const form = new FormData();
-      form.append('audio', preparedAudio.blob, preparedAudio.filename);
-      form.append('mimeType', preparedAudio.mimeType);
-
-      if (preparedAudio.normalizedFromMimeType) {
-        captureMessage('Normalized audio for transcription upload', 'info', {
-          context: 'diary:audioTranscribe',
-          normalizedFromMimeType: preparedAudio.normalizedFromMimeType,
-          normalizedToMimeType: preparedAudio.mimeType,
-          isRetry: options?.isRetry ?? false,
-        });
-      }
-
-      let response: Response;
-      try {
-        response = await fetch('/api/ai/transcribe', {
-          method: 'POST',
-          body: form,
-        });
-      } catch (requestErr) {
-        captureError(requestErr, { context: 'diary:audioTranscribe', operation: 'request-route', isRetry: options?.isRetry ?? false });
-        setTranscriptionStatus('failed');
-        setTranscriptionError('The transcription request could not reach the server. You can retry or type your transcript manually.');
-        toast.error('Transcription request failed', {
-          description: 'The transcription request could not reach the server. You can retry or type your transcript manually.',
-        });
-        return;
-      }
-
-      let data: TranscribeRouteResponse | null = null;
-      try {
-        data = await response.json();
-      } catch (parseErr) {
-        captureError(parseErr, { context: 'diary:audioTranscribe', operation: 'parse-route-response', isRetry: options?.isRetry ?? false });
-        setTranscriptionStatus('failed');
-        setTranscriptionError('The server returned an unreadable transcription response. You can retry or type your transcript manually.');
-        toast.error('Unreadable transcription response', {
-          description: 'The server returned an unreadable transcription response. You can retry or type your transcript manually.',
-        });
-        return;
-      }
-
-      if (!response.ok) {
-        const message = typeof data?.error === 'string' && data.error.trim().length > 0
-          ? data.error
-          : 'Could not transcribe audio. You can type your transcript manually.';
-
-        setTranscriptionStatus('failed');
-        setTranscriptionError(message);
-
-        if (data?.missing_env) {
-          captureMessage(data.error ?? 'Audio transcription unavailable', 'warning', {
-            context: 'diary:audioTranscribe',
-            missing_env: data.missing_env,
-            isRetry: options?.isRetry ?? false,
-          });
-          toast.warning('Auto-transcription unavailable', {
-            description: 'You can type your transcript manually below.',
-          });
-        } else {
-          toast.error('Transcription failed', {
-            description: message,
-          });
-        }
-        return;
-      }
-
-      if (data?.success && data.transcript && data.transcript.trim().length > 0) {
-        setTranscriptionStatus('succeeded');
-        setTranscriptionError(null);
-        setEditedTranscript(data.transcript);
-        processTranscript(data.transcript);
-        writeRecoveryState(null);
-        trackBetaEvent({
-          eventName: 'diary_processed',
-          route: '/coach',
-          tabName: 'diary',
-          actionName: options?.isRetry ? 'audio_transcribed_retry' : 'audio_transcribed',
-        });
-        toast.success(options?.isRetry ? 'Transcription retried' : 'Audio transcribed', {
-          description: options?.isRetry
-            ? 'Transcript captured from your existing recording.'
-            : 'Transcript captured from your recording.',
-        });
-      } else if (data?.errorCode === 'empty_transcript' || data?.success === false) {
-        const message = typeof data?.error === 'string' && data.error.trim().length > 0
-          ? data.error
-          : 'The transcription service returned no text from this recording.';
-        setTranscriptionStatus('failed');
-        setTranscriptionError(message);
-        toast.warning('No speech detected', {
-          description: message,
-        });
-      }
-    } catch (err) {
-      captureError(err, { context: 'diary:audioTranscribe', isRetry: options?.isRetry ?? false });
-      setTranscriptionStatus('failed');
-      setTranscriptionError('The transcription request failed unexpectedly. You can retry or type your transcript manually.');
-      toast.error('Transcription failed', {
-        description: 'The transcription request failed unexpectedly. You can retry or type your transcript manually.',
-      });
-    } finally {
-      setIsAudioTranscribing(false);
-    }
-  }, [persistedAudioMimeType, processTranscript]);
-
-  const handleRetryTranscription = React.useCallback(async () => {
-    if (isAudioTranscribing) return;
-
-    if (audioBlob) {
-      audioTranscribedRef.current = true;
-      await transcribeAudioBlob(audioBlob, { isRetry: true });
-      return;
-    }
-
-    if (!persistedAudioPath) return;
-
-    const recoveredBlob = await downloadAudio(persistedAudioPath);
-    if (!recoveredBlob) {
-      setTranscriptionStatus('failed');
-      setTranscriptionError('Saved audio could not be recovered for retry. You can type your transcript manually or re-record.');
-      toast.error('Recovery failed', {
-        description: 'Saved audio could not be recovered for retry. You can type your transcript manually or re-record.',
-      });
-      return;
-    }
-
-    audioTranscribedRef.current = true;
-    await transcribeAudioBlob(recoveredBlob, { isRetry: true });
-  }, [audioBlob, isAudioTranscribing, persistedAudioPath, transcribeAudioBlob]);
-
   React.useEffect(() => {
     const recovery = readRecoveryState();
     if (!recovery) return;
 
     setPersistedAudioPath(recovery.storagePath);
     setPersistedAudioMimeType(recovery.mimeType);
-    setTranscriptionStatus('failed');
-    setTranscriptionError('Recovered your previous recording. Retry transcription or type your transcript manually.');
 
     if (!audioUrl) {
       void getSignedAudioUrl(recovery.storagePath).then((url) => {
@@ -446,26 +216,51 @@ export function VoiceRecorder({ onComplete, onCancel }: VoiceRecorderProps) {
 
   React.useEffect(() => {
     if (recordingStatus === 'recording') {
-      audioTranscribedRef.current = false;
-      setTranscriptionStatus('idle');
+      setTranscriptionStatus(isSpeechSupported ? 'capturing' : 'idle');
       setTranscriptionError(null);
       setPersistedAudioPath(null);
       setPersistedAudioMimeType(null);
       writeRecoveryState(null);
     }
-  }, [recordingStatus]);
+  }, [isSpeechSupported, recordingStatus]);
 
   React.useEffect(() => {
-    if (recordingStatus !== 'completed' || !audioBlob || audioTranscribedRef.current) return;
+    if (recordingStatus !== 'completed' || !audioBlob) return;
 
-    audioTranscribedRef.current = true;
     const mimeType = audioBlob.type || 'audio/webm';
+    void persistAudioForRecovery(audioBlob, mimeType, durationSeconds);
+  }, [audioBlob, durationSeconds, persistAudioForRecovery, recordingStatus]);
 
-    void (async () => {
-      await persistAudioForRecovery(audioBlob, mimeType, durationSeconds);
-      await transcribeAudioBlob(audioBlob);
-    })();
-  }, [audioBlob, durationSeconds, persistAudioForRecovery, recordingStatus, transcribeAudioBlob]);
+  React.useEffect(() => {
+    if (!isSpeechSupported) {
+      setTranscriptionStatus('failed');
+      setTranscriptionError('Live speech recognition is not available in this browser. You can type your transcript manually.');
+      return;
+    }
+
+    if (speechError) {
+      setTranscriptionStatus('failed');
+      setTranscriptionError(speechError);
+      return;
+    }
+
+    if (recordingStatus === 'recording' || recordingStatus === 'paused') {
+      setTranscriptionStatus('capturing');
+      setTranscriptionError(null);
+      return;
+    }
+
+    if (committedText.trim().length > 0) {
+      setEditedTranscript((current) => (current === committedText ? current : committedText));
+      setTranscriptionStatus('succeeded');
+      setTranscriptionError(null);
+      return;
+    }
+
+    if (recordingStatus === 'completed') {
+      setTranscriptionStatus('idle');
+    }
+  }, [committedText, isSpeechSupported, recordingStatus, speechError]);
 
   React.useEffect(() => {
     const audio = audioRef.current;
@@ -514,7 +309,7 @@ export function VoiceRecorder({ onComplete, onCancel }: VoiceRecorderProps) {
     resetPreview();
     resetProcessor();
     setEditedTranscript('');
-    setTranscriptionStatus('idle');
+    setTranscriptionStatus(isSpeechSupported ? 'capturing' : 'idle');
     setTranscriptionError(null);
     setIsEditingTranscript(false);
     setShowProcessedView(false);
@@ -680,8 +475,8 @@ export function VoiceRecorder({ onComplete, onCancel }: VoiceRecorderProps) {
   const liveTranscript = interimText;
   const transcriptBadgeLabel = editedTranscript
     ? 'Captured'
-    : transcriptionStatus === 'transcribing'
-      ? 'Transcribing…'
+    : transcriptionStatus === 'capturing'
+      ? 'Listening...'
       : transcriptionStatus === 'failed'
         ? 'Failed'
         : 'Empty';
@@ -771,8 +566,8 @@ export function VoiceRecorder({ onComplete, onCancel }: VoiceRecorderProps) {
                   <FileText className="h-4 w-4 text-muted-foreground" />
                   <span className="text-xs font-medium text-muted-foreground">Live Transcript</span>
                 </div>
-                <p className="text-sm text-left leading-relaxed">
-                  {liveTranscript || (
+                <p className="text-sm text-left leading-relaxed whitespace-pre-wrap">
+                  {committedText || liveTranscript ? [committedText, liveTranscript].filter(Boolean).join(' ').trim() : (
                     <span className="text-muted-foreground italic">Listening...</span>
                   )}
                 </p>
@@ -865,13 +660,13 @@ export function VoiceRecorder({ onComplete, onCancel }: VoiceRecorderProps) {
                 )}
               </div>
 
-              {transcriptionStatus === 'transcribing' && !editedTranscript && (
+              {transcriptionStatus === 'capturing' && !editedTranscript && (
                 <div className="p-3 rounded-xl bg-primary/5 border border-primary/20 mb-3 flex items-start gap-3">
                   <Loader2 className="h-4 w-4 text-primary animate-spin shrink-0 mt-0.5" />
                   <div className="flex-1 text-left">
-                    <p className="text-sm font-medium text-primary">Transcribing recording</p>
+                    <p className="text-sm font-medium text-primary">Capturing transcript</p>
                     <p className="text-xs text-muted-foreground mt-0.5">
-                      We&apos;re converting your audio to text before analysis starts.
+                      We&apos;re using browser speech recognition while audio recording continues.
                     </p>
                   </div>
                 </div>
@@ -881,21 +676,11 @@ export function VoiceRecorder({ onComplete, onCancel }: VoiceRecorderProps) {
                 <div className="p-3 rounded-xl bg-destructive/10 border border-destructive/20 mb-3 flex items-start gap-3">
                   <AlertCircle className="h-4 w-4 text-destructive shrink-0 mt-0.5" />
                   <div className="flex-1 text-left">
-                    <p className="text-sm font-medium text-destructive">Transcription failed</p>
+                    <p className="text-sm font-medium text-destructive">Transcript unavailable</p>
                     <p className="text-xs text-destructive/80 mt-0.5">
-                      {transcriptionError ?? 'Could not transcribe audio. You can add your transcript manually.'}
+                      {transcriptionError ?? 'Could not capture browser speech text. You can add your transcript manually.'}
                     </p>
                   </div>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="shrink-0 text-xs gap-1"
-                    onClick={() => void handleRetryTranscription()}
-                    disabled={(!audioBlob && !persistedAudioPath) || isAudioTranscribing}
-                  >
-                    <RefreshCw className={cn('h-3 w-3', isAudioTranscribing && 'animate-spin')} />
-                    Retry transcription
-                  </Button>
                 </div>
               )}
 
@@ -913,14 +698,14 @@ export function VoiceRecorder({ onComplete, onCancel }: VoiceRecorderProps) {
                     <p className="text-sm leading-relaxed whitespace-pre-wrap">
                       {editedTranscript}
                     </p>
-                  ) : transcriptionStatus === 'transcribing' ? (
+                  ) : transcriptionStatus === 'capturing' ? (
                     <span className="flex items-center gap-2 text-sm text-muted-foreground">
                       <Loader2 className="h-3.5 w-3.5 animate-spin shrink-0" />
-                      Transcribing audio…
+                      Capturing browser speech...
                     </span>
                   ) : transcriptionStatus === 'failed' ? (
                     <p className="text-sm text-muted-foreground italic">
-                      Transcription did not return text. Add your transcript manually to continue.
+                      Speech text was not captured. Add your transcript manually to continue.
                     </p>
                   ) : (
                     <p className="text-sm text-muted-foreground italic">
@@ -932,7 +717,7 @@ export function VoiceRecorder({ onComplete, onCancel }: VoiceRecorderProps) {
                 </div>
               )}
 
-              {!editedTranscript && transcriptionStatus !== 'transcribing' && (
+              {!editedTranscript && transcriptionStatus !== 'capturing' && (
                 <Button variant="link" size="sm" className="mt-2 h-auto p-0 text-xs" onClick={() => setIsEditingTranscript(true)}>
                   + Add transcript manually
                 </Button>
@@ -1148,7 +933,7 @@ export function VoiceRecorder({ onComplete, onCancel }: VoiceRecorderProps) {
                 size="lg"
                 className="gap-2 flex-1"
                 onClick={handleSave}
-                disabled={isSaving || (transcriptionStatus === 'transcribing' && !editedTranscript)}
+                disabled={isSaving || (transcriptionStatus === 'capturing' && !editedTranscript)}
               >
                 {isSaving ? (
                   <>

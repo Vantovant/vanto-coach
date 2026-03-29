@@ -75,6 +75,7 @@ export interface UseLiveSpeechPreviewReturn {
   supported: boolean;
   previewStatus: LiveSpeechPreviewStatus;
   interimText: string;
+  committedText: string;
   error: string | null;
   startPreview: () => void;
   stopPreview: () => void;
@@ -90,6 +91,22 @@ interface LiveSpeechPreviewOptions {
   maxAlternatives?: number;
 }
 
+function normalizeSpeechSegment(value: string): string {
+  return value.replace(/\s+/g, ' ').trim();
+}
+
+function appendUniqueTranscript(existing: string, incoming: string): string {
+  const normalizedIncoming = normalizeSpeechSegment(incoming);
+  if (!normalizedIncoming) return existing;
+
+  const normalizedExisting = normalizeSpeechSegment(existing);
+  if (!normalizedExisting) return normalizedIncoming;
+  if (normalizedExisting === normalizedIncoming) return existing;
+  if (normalizedExisting.endsWith(normalizedIncoming)) return existing;
+
+  return `${existing.trim()} ${normalizedIncoming}`.trim();
+}
+
 export function useLiveSpeechPreview(
   options: LiveSpeechPreviewOptions = {}
 ): UseLiveSpeechPreviewReturn {
@@ -102,6 +119,7 @@ export function useLiveSpeechPreview(
 
   const [previewStatus, setPreviewStatus] = useState<LiveSpeechPreviewStatus>('idle');
   const [interimText, setInterimText] = useState('');
+  const [committedText, setCommittedText] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [supported, setSupported] = useState(true);
 
@@ -109,6 +127,7 @@ export function useLiveSpeechPreview(
   const isPausedRef = useRef(false);
   const shouldRestartRef = useRef(false);
   const initRecognitionRef = useRef<(() => SpeechRecognition | null) | null>(null);
+  const lastFinalSegmentRef = useRef('');
 
   useEffect(() => {
     const speechApi = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -137,15 +156,27 @@ export function useLiveSpeechPreview(
     };
 
     recognition.onresult = (event: SpeechRecognitionEvent) => {
-      let currentInterim = '';
+      let nextInterim = '';
 
       for (let index = event.resultIndex; index < event.results.length; index += 1) {
         const result = event.results[index];
-        const text = result[0].transcript;
-        currentInterim += text;
+        const text = normalizeSpeechSegment(result[0].transcript);
+        if (!text) continue;
+
+        if (result.isFinal) {
+          if (text === lastFinalSegmentRef.current) {
+            continue;
+          }
+
+          lastFinalSegmentRef.current = text;
+          setCommittedText((previous) => appendUniqueTranscript(previous, text));
+          continue;
+        }
+
+        nextInterim = appendUniqueTranscript(nextInterim, text);
       }
 
-      setInterimText(currentInterim.trim());
+      setInterimText(nextInterim);
     };
 
     recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
@@ -183,7 +214,7 @@ export function useLiveSpeechPreview(
             } catch {
             }
           }
-        }, 100);
+        }, 250);
       } else if (!isPausedRef.current) {
         setPreviewStatus('stopped');
       }
@@ -204,6 +235,8 @@ export function useLiveSpeechPreview(
 
     setError(null);
     setInterimText('');
+    setCommittedText('');
+    lastFinalSegmentRef.current = '';
     isPausedRef.current = false;
     shouldRestartRef.current = true;
     recognitionRef.current = initRecognition();
@@ -267,6 +300,8 @@ export function useLiveSpeechPreview(
 
   const resetPreview = useCallback(() => {
     setInterimText('');
+    setCommittedText('');
+    lastFinalSegmentRef.current = '';
     setError(null);
     setPreviewStatus(supported ? 'idle' : 'unsupported');
   }, [supported]);
@@ -287,6 +322,7 @@ export function useLiveSpeechPreview(
     supported,
     previewStatus,
     interimText,
+    committedText,
     error,
     startPreview,
     stopPreview,

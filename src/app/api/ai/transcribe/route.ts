@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { captureError, captureMessage } from '@/lib/monitoring';
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+const MAX_UPSTREAM_ERROR_BODY_LENGTH = 300;
 
 function getExtFromMime(mimeType: string): string {
   if (mimeType.includes('mp4') || mimeType.includes('m4a')) return 'mp4';
@@ -9,6 +10,10 @@ function getExtFromMime(mimeType: string): string {
   if (mimeType.includes('mpeg') || mimeType.includes('mp3')) return 'mp3';
   if (mimeType.includes('wav')) return 'wav';
   return 'webm';
+}
+
+function trimUpstreamBody(value: string): string {
+  return value.trim().slice(0, MAX_UPSTREAM_ERROR_BODY_LENGTH);
 }
 
 export async function POST(request: NextRequest) {
@@ -85,16 +90,27 @@ export async function POST(request: NextRequest) {
 
     if (!whisperResponse.ok) {
       const errText = await whisperResponse.text().catch(() => '');
+      const safeUpstreamBody = trimUpstreamBody(errText);
       captureMessage(`Whisper API error: ${whisperResponse.status}`, 'error', {
         context: 'api:transcribe',
         statusCode: whisperResponse.status,
-        body: errText.slice(0, 200),
+        body: safeUpstreamBody,
+        submittedMimeType: mimeType,
+        filename,
+        extension: ext,
       });
       return NextResponse.json(
         {
           success: false,
           error: 'The transcription service rejected this audio for processing.',
           errorCode: 'upstream_rejected_audio',
+          detail: {
+            upstreamStatus: whisperResponse.status,
+            upstreamBody: safeUpstreamBody,
+            submittedMimeType: mimeType,
+            filename,
+            extension: ext,
+          },
         },
         { status: 502 }
       );

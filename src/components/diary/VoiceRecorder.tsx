@@ -70,8 +70,23 @@ type TranscribeRouteResponse = {
   transcript?: string;
   error?: string;
   errorCode?: string;
+  detail?: {
+    upstreamStatus?: number;
+    upstreamBody?: string;
+    submittedMimeType?: string;
+    filename?: string;
+    extension?: string;
+  };
   missing_env?: string;
 };
+
+function getExtFromMimeType(mimeType: string): string {
+  if (mimeType.includes('mp4') || mimeType.includes('m4a')) return 'mp4';
+  if (mimeType.includes('ogg')) return 'ogg';
+  if (mimeType.includes('mpeg') || mimeType.includes('mp3')) return 'mp3';
+  if (mimeType.includes('wav')) return 'wav';
+  return 'webm';
+}
 
 function readRecoveryState(): PersistedAudioRecovery | null {
   if (typeof window === 'undefined') return null;
@@ -190,8 +205,10 @@ export function VoiceRecorder({ onComplete, onCancel }: VoiceRecorderProps) {
 
     try {
       const mimeType = blob.type || persistedAudioMimeType || 'audio/webm';
+      const ext = getExtFromMimeType(mimeType);
+      const filename = `recording.${ext}`;
       const form = new FormData();
-      form.append('audio', blob);
+      form.append('audio', blob, filename);
       form.append('mimeType', mimeType);
 
       let response: Response;

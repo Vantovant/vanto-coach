@@ -30,7 +30,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
 import { useAudioRecorder, type RecordingResult } from '@/hooks/useAudioRecorder';
-import { useSpeechRecognition, type SpeechRecognitionStatus } from '@/hooks/useSpeechRecognition';
+import { useLiveSpeechPreview } from '@/hooks/useLiveSpeechPreview';
 import { useTranscriptProcessor, type ProcessedTranscript, type ProcessingStatus } from '@/hooks/useTranscriptProcessor';
 import { ScriptureList } from '@/components/bible/ScriptureCard';
 import fixWebmDuration from 'fix-webm-duration';
@@ -74,17 +74,16 @@ export function VoiceRecorder({ onComplete, onCancel }: VoiceRecorderProps) {
   } = useAudioRecorder();
 
   const {
-    status: speechStatus,
-    isSupported: isSpeechSupported,
-    transcript,
-    interimTranscript,
+    previewStatus,
+    supported: isSpeechSupported,
+    interimText,
     error: speechError,
-    startListening,
-    stopListening,
-    pauseListening,
-    resumeListening,
-    resetTranscript,
-  } = useSpeechRecognition({
+    startPreview,
+    stopPreview,
+    pausePreview,
+    resumePreview,
+    resetPreview,
+  } = useLiveSpeechPreview({
     language: 'en-US',
     continuous: true,
     interimResults: true,
@@ -114,20 +113,6 @@ export function VoiceRecorder({ onComplete, onCancel }: VoiceRecorderProps) {
   const [editedTranscript, setEditedTranscript] = React.useState('');
   const [isEditingTranscript, setIsEditingTranscript] = React.useState(false);
 
-  // Sync edited transcript with recognition transcript when recording completes
-  React.useEffect(() => {
-    if (recordingStatus === 'completed' && transcript) {
-      setEditedTranscript(transcript);
-    }
-  }, [recordingStatus, transcript]);
-
-  // Auto-process transcript when recording completes (Speech API path)
-  React.useEffect(() => {
-    if (recordingStatus === 'completed' && transcript && transcript.trim().length > 0) {
-      processTranscript(transcript);
-    }
-  }, [recordingStatus, transcript, processTranscript]);
-
   // ── Audio-blob transcription fallback ───────────────────────────────────────
   // Fires when recording completes but the Web Speech API produced no text
   // (common on iOS Safari and any mobile browser without reliable continuous
@@ -148,11 +133,9 @@ export function VoiceRecorder({ onComplete, onCancel }: VoiceRecorderProps) {
   }, [recordingStatus]);
 
   React.useEffect(() => {
-    const hasText = transcript && transcript.trim().length > 0;
     if (
       recordingStatus !== 'completed' ||
       !audioBlob ||
-      hasText ||
       audioTranscribedRef.current
     ) return;
 
@@ -226,7 +209,7 @@ export function VoiceRecorder({ onComplete, onCancel }: VoiceRecorderProps) {
     };
 
     doAudioTranscription();
-  }, [recordingStatus, audioBlob, transcript, processTranscript]);
+  }, [recordingStatus, audioBlob, processTranscript]);
 
   React.useEffect(() => {
     const audio = audioRef.current;
@@ -272,7 +255,7 @@ export function VoiceRecorder({ onComplete, onCancel }: VoiceRecorderProps) {
 
   const handleStartRecording = async () => {
     await trackBetaEvent({ eventName: 'diary_record_started', route: '/coach', tabName: 'diary', actionName: 'start_recording' });
-    resetTranscript();
+    resetPreview();
     resetProcessor();
     setEditedTranscript('');
     setTranscriptionStatus('idle');
@@ -281,22 +264,22 @@ export function VoiceRecorder({ onComplete, onCancel }: VoiceRecorderProps) {
     setShowProcessedView(false);
     await startRecording();
     if (isSpeechSupported) {
-      startListening();
+      startPreview();
     }
   };
 
   const handlePauseRecording = () => {
     pauseRecording();
-    pauseListening();
+    pausePreview();
   };
 
   const handleResumeRecording = () => {
     resumeRecording();
-    resumeListening();
+    resumePreview();
   };
 
   const handleStop = async () => {
-    stopListening();
+    stopPreview();
     await stopRecording();
   };
 
@@ -338,7 +321,7 @@ export function VoiceRecorder({ onComplete, onCancel }: VoiceRecorderProps) {
         audioUrl: finalUrl,
         duration: durationSeconds,
         mimeType: finalBlob.type,
-        transcript: editedTranscript || transcript,
+        transcript: editedTranscript,
         cleanedTranscript: processedResult?.cleanedTranscript,
         summary: processedResult?.summary,
         keyTopics: processedResult?.keyTopics,
@@ -360,7 +343,7 @@ export function VoiceRecorder({ onComplete, onCancel }: VoiceRecorderProps) {
     }
     setIsPlaying(false);
     setPlaybackProgress(0);
-    resetTranscript();
+    resetPreview();
     resetProcessor();
     setEditedTranscript('');
     setTranscriptionStatus('idle');
@@ -407,16 +390,14 @@ export function VoiceRecorder({ onComplete, onCancel }: VoiceRecorderProps) {
     if (!isSpeechSupported) {
       return { label: 'Not Supported', color: 'bg-muted text-muted-foreground', icon: <MicOff className="h-3 w-3" /> };
     }
-    switch (speechStatus) {
+    switch (previewStatus) {
       case 'listening':
         return { label: 'Listening', color: 'bg-success/20 text-success', icon: <Mic className="h-3 w-3 animate-pulse" /> };
-      case 'starting':
-        return { label: 'Starting...', color: 'bg-warning/20 text-warning', icon: <Loader2 className="h-3 w-3 animate-spin" /> };
       case 'paused':
         return { label: 'Paused', color: 'bg-warning/20 text-warning', icon: <Pause className="h-3 w-3" /> };
       case 'stopped':
         return { label: 'Complete', color: 'bg-success/20 text-success', icon: <CheckCircle2 className="h-3 w-3" /> };
-      case 'error':
+      case 'failed':
         return { label: 'Error', color: 'bg-destructive/20 text-destructive', icon: <AlertCircle className="h-3 w-3" /> };
       default:
         return { label: 'Ready', color: 'bg-muted text-muted-foreground', icon: <FileText className="h-3 w-3" /> };
@@ -427,10 +408,8 @@ export function VoiceRecorder({ onComplete, onCancel }: VoiceRecorderProps) {
   const combinedError = recordingError || speechError;
   const status = recordingStatus;
 
-  const liveTranscript = interimTranscript
-    ? `${transcript} ${interimTranscript}`.trim()
-    : transcript;
-  const transcriptBadgeLabel = (editedTranscript || transcript)
+  const liveTranscript = interimText;
+  const transcriptBadgeLabel = editedTranscript
     ? 'Captured'
     : transcriptionStatus === 'transcribing'
       ? 'Transcribing…'
@@ -517,18 +496,14 @@ export function VoiceRecorder({ onComplete, onCancel }: VoiceRecorderProps) {
               ))}
             </div>
 
-            {isSpeechSupported && (liveTranscript || interimTranscript) && (
+            {isSpeechSupported && liveTranscript && (
               <div className="w-full max-w-md mb-6 p-4 rounded-xl bg-muted/50 border max-h-32 overflow-y-auto">
                 <div className="flex items-center gap-2 mb-2">
                   <FileText className="h-4 w-4 text-muted-foreground" />
                   <span className="text-xs font-medium text-muted-foreground">Live Transcript</span>
                 </div>
                 <p className="text-sm text-left leading-relaxed">
-                  {transcript}
-                  {interimTranscript && (
-                    <span className="text-muted-foreground italic"> {interimTranscript}</span>
-                  )}
-                  {!transcript && !interimTranscript && (
+                  {liveTranscript || (
                     <span className="text-muted-foreground italic">Listening...</span>
                   )}
                 </p>
@@ -596,7 +571,7 @@ export function VoiceRecorder({ onComplete, onCancel }: VoiceRecorderProps) {
                     {transcriptBadgeLabel}
                   </Badge>
                 </div>
-                {(transcript || editedTranscript) && !isEditingTranscript && (
+                {editedTranscript && !isEditingTranscript && (
                   <Button variant="ghost" size="sm" className="h-7 gap-1 text-xs" onClick={() => setIsEditingTranscript(true)}>
                     <Edit3 className="h-3 w-3" />
                     Edit
@@ -610,7 +585,7 @@ export function VoiceRecorder({ onComplete, onCancel }: VoiceRecorderProps) {
                       className="h-7 w-7 p-0"
                       onClick={() => {
                         setIsEditingTranscript(false);
-                        setEditedTranscript(transcript);
+                        setIsEditingTranscript(false);
                       }}
                     >
                       <X className="h-3 w-3" />
@@ -622,7 +597,7 @@ export function VoiceRecorder({ onComplete, onCancel }: VoiceRecorderProps) {
                 )}
               </div>
 
-              {transcriptionStatus === 'transcribing' && !(editedTranscript || transcript) && (
+              {transcriptionStatus === 'transcribing' && !editedTranscript && (
                 <div className="p-3 rounded-xl bg-primary/5 border border-primary/20 mb-3 flex items-start gap-3">
                   <Loader2 className="h-4 w-4 text-primary animate-spin shrink-0 mt-0.5" />
                   <div className="flex-1 text-left">
@@ -656,9 +631,9 @@ export function VoiceRecorder({ onComplete, onCancel }: VoiceRecorderProps) {
                 />
               ) : (
                 <div className="p-4 rounded-xl bg-muted/50 border min-h-[80px] max-h-40 overflow-y-auto">
-                  {editedTranscript || transcript ? (
+                  {editedTranscript ? (
                     <p className="text-sm leading-relaxed whitespace-pre-wrap">
-                      {editedTranscript || transcript}
+                      {editedTranscript}
                     </p>
                   ) : transcriptionStatus === 'transcribing' ? (
                     <span className="flex items-center gap-2 text-sm text-muted-foreground">
@@ -679,14 +654,14 @@ export function VoiceRecorder({ onComplete, onCancel }: VoiceRecorderProps) {
                 </div>
               )}
 
-              {!transcript && !editedTranscript && transcriptionStatus !== 'transcribing' && (
+              {!editedTranscript && transcriptionStatus !== 'transcribing' && (
                 <Button variant="link" size="sm" className="mt-2 h-auto p-0 text-xs" onClick={() => setIsEditingTranscript(true)}>
                   + Add transcript manually
                 </Button>
               )}
             </div>
 
-            {(transcript || editedTranscript) && (
+            {editedTranscript && (
               <div className="w-full max-w-md mb-6">
                 {processingStatus === 'processing' && (
                   <div className="p-4 rounded-xl bg-primary/5 border border-primary/20 mb-4">
@@ -720,7 +695,7 @@ export function VoiceRecorder({ onComplete, onCancel }: VoiceRecorderProps) {
                       size="sm"
                       className="shrink-0 text-xs gap-1"
                       onClick={() => {
-                        const t = editedTranscript || transcript;
+                        const t = editedTranscript;
                         if (t) {
                           captureMessage('User retried transcript processing after error', 'info', { context: 'diary:process' });
                           toast.info('Retrying analysis…');
@@ -748,7 +723,7 @@ export function VoiceRecorder({ onComplete, onCancel }: VoiceRecorderProps) {
                       size="sm"
                       className="shrink-0 text-xs gap-1"
                       onClick={() => {
-                        const t = editedTranscript || transcript;
+                        const t = editedTranscript;
                         if (t) {
                           captureMessage('User retried transcript processing after timeout', 'info', { context: 'diary:process' });
                           toast.info('Retrying analysis…');
@@ -895,7 +870,7 @@ export function VoiceRecorder({ onComplete, onCancel }: VoiceRecorderProps) {
                 size="lg"
                 className="gap-2 flex-1"
                 onClick={handleSave}
-                disabled={isSaving || (transcriptionStatus === 'transcribing' && !(editedTranscript || transcript))}
+                disabled={isSaving || (transcriptionStatus === 'transcribing' && !editedTranscript)}
               >
                 {isSaving ? (
                   <>

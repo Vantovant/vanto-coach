@@ -134,11 +134,15 @@ export function VoiceRecorder({ onComplete, onCancel }: VoiceRecorderProps) {
   // (Whisper-1) and feeds the result back into the normal processing chain.
   const audioTranscribedRef = React.useRef(false);
   const [isAudioTranscribing, setIsAudioTranscribing] = React.useState(false);
+  const [transcriptionStatus, setTranscriptionStatus] = React.useState<'idle' | 'transcribing' | 'failed' | 'succeeded'>('idle');
+  const [transcriptionError, setTranscriptionError] = React.useState<string | null>(null);
 
   // Reset the guard on each new recording so the effect can fire again
   React.useEffect(() => {
     if (recordingStatus === 'recording') {
       audioTranscribedRef.current = false;
+      setTranscriptionStatus('idle');
+      setTranscriptionError(null);
     }
   }, [recordingStatus]);
 
@@ -147,14 +151,16 @@ export function VoiceRecorder({ onComplete, onCancel }: VoiceRecorderProps) {
     if (
       recordingStatus !== 'completed' ||
       !audioBlob ||
-      hasText ||                       // Speech API already produced text — skip
-      audioTranscribedRef.current      // already attempted for this recording
+      hasText ||
+      audioTranscribedRef.current
     ) return;
 
     audioTranscribedRef.current = true;
 
     const doAudioTranscription = async () => {
       setIsAudioTranscribing(true);
+      setTranscriptionStatus('transcribing');
+      setTranscriptionError(null);
       try {
         const mimeType = audioBlob.type || 'audio/webm';
         const form = new FormData();
@@ -168,8 +174,14 @@ export function VoiceRecorder({ onComplete, onCancel }: VoiceRecorderProps) {
 
         if (!response.ok) {
           const data = await response.json().catch(() => ({}));
+          const message = typeof data.error === 'string' && data.error.trim().length > 0
+            ? data.error
+            : 'Could not transcribe audio. You can type your transcript manually.';
+
+          setTranscriptionStatus('failed');
+          setTranscriptionError(message);
+
           if (data.missing_env) {
-            // OPENAI_API_KEY not set in this deployment
             captureMessage(data.error ?? 'Audio transcription unavailable', 'warning', {
               context: 'diary:audioTranscribe',
               missing_env: data.missing_env,
@@ -179,7 +191,7 @@ export function VoiceRecorder({ onComplete, onCancel }: VoiceRecorderProps) {
             });
           } else {
             toast.error('Transcription failed', {
-              description: 'Could not transcribe audio. You can type your transcript manually.',
+              description: message,
             });
           }
           return;
@@ -187,17 +199,26 @@ export function VoiceRecorder({ onComplete, onCancel }: VoiceRecorderProps) {
 
         const data = await response.json();
         if (data.success && data.transcript && data.transcript.trim().length > 0) {
+          setTranscriptionStatus('succeeded');
+          setTranscriptionError(null);
           setEditedTranscript(data.transcript);
           processTranscript(data.transcript);
           trackBetaEvent({ eventName: 'diary_processed', route: '/coach', tabName: 'diary', actionName: 'audio_transcribed' });
           toast.success('Audio transcribed', { description: 'Transcript captured from your recording.' });
         } else if (data.success) {
+          setTranscriptionStatus('failed');
+          setTranscriptionError('No words were found in the recording. You can add a transcript manually.');
           toast.warning('No speech detected', {
             description: 'No words were found in the recording. You can add a transcript manually.',
           });
         }
       } catch (err) {
         captureError(err, { context: 'diary:audioTranscribe' });
+        setTranscriptionStatus('failed');
+        setTranscriptionError('Could not transcribe audio right now. You can add your transcript manually and continue.');
+        toast.error('Transcription failed', {
+          description: 'Could not transcribe audio right now. You can add your transcript manually and continue.',
+        });
       } finally {
         setIsAudioTranscribing(false);
       }
@@ -206,7 +227,6 @@ export function VoiceRecorder({ onComplete, onCancel }: VoiceRecorderProps) {
     doAudioTranscription();
   }, [recordingStatus, audioBlob, transcript, processTranscript]);
 
-  // Handle audio playback events
   React.useEffect(() => {
     const audio = audioRef.current;
     if (!audio) return;
@@ -249,12 +269,13 @@ export function VoiceRecorder({ onComplete, onCancel }: VoiceRecorderProps) {
     }
   };
 
-  // Combined start: audio recording + speech recognition
   const handleStartRecording = async () => {
     await trackBetaEvent({ eventName: 'diary_record_started', route: '/coach', tabName: 'diary', actionName: 'start_recording' });
     resetTranscript();
     resetProcessor();
     setEditedTranscript('');
+    setTranscriptionStatus('idle');
+    setTranscriptionError(null);
     setIsEditingTranscript(false);
     setShowProcessedView(false);
     await startRecording();
@@ -263,23 +284,19 @@ export function VoiceRecorder({ onComplete, onCancel }: VoiceRecorderProps) {
     }
   };
 
-  // Combined pause
   const handlePauseRecording = () => {
     pauseRecording();
     pauseListening();
   };
 
-  // Combined resume
   const handleResumeRecording = () => {
     resumeRecording();
     resumeListening();
   };
 
-  // Combined stop
   const handleStop = async () => {
     stopListening();
-    const result = await stopRecording();
-    // Result is stored in hook state
+    await stopRecording();
   };
 
   const handleSave = async () => {
@@ -287,9 +304,6 @@ export function VoiceRecorder({ onComplete, onCancel }: VoiceRecorderProps) {
 
     setIsSaving(true);
 
-    // Wait for AI processing to finish — poll every 250 ms.
-    // The hook now enforces its own 45s abort, so we don't need a separate
-    // timeout here. We just wait until it exits the 'processing' state.
     if (processingStatus === 'processing') {
       await new Promise<void>((resolve) => {
         const check = setInterval(() => {
@@ -301,9 +315,6 @@ export function VoiceRecorder({ onComplete, onCancel }: VoiceRecorderProps) {
       });
     }
 
-    // Fix WebM duration header — MediaRecorder blobs have no Duration element,
-    // causing browsers to report Infinity. fixWebmDuration writes the real elapsed
-    // duration (in ms) into the container so the audio element can scrub correctly.
     let finalBlob: Blob = audioBlob;
     let finalUrl: string = audioUrl;
     if (audioBlob.type.includes('webm') && duration > 0) {
@@ -313,11 +324,9 @@ export function VoiceRecorder({ onComplete, onCancel }: VoiceRecorderProps) {
         finalBlob = fixed;
         finalUrl = fixedUrl;
       } catch {
-        // Non-fatal — use original blob if fix fails
       }
     }
 
-    // Brief delay for UX
     await new Promise(resolve => setTimeout(resolve, 300));
 
     setIsSaving(false);
@@ -353,6 +362,8 @@ export function VoiceRecorder({ onComplete, onCancel }: VoiceRecorderProps) {
     resetTranscript();
     resetProcessor();
     setEditedTranscript('');
+    setTranscriptionStatus('idle');
+    setTranscriptionError(null);
     setIsEditingTranscript(false);
     setShowProcessedView(false);
     discardRecording();
@@ -378,20 +389,16 @@ export function VoiceRecorder({ onComplete, onCancel }: VoiceRecorderProps) {
     return moodEmojis[mood] || '📝';
   };
 
-  // Generate waveform bars based on audio level
-  const generateWaveformBars = () => {
-    const bars = 32;
-    return Array.from({ length: bars }, (_, i) => {
-      const baseHeight = 8;
-      const variance = Math.sin((i / bars) * Math.PI) * 0.5 + 0.5;
-      const levelFactor = audioLevel / 100;
-      const randomFactor = 0.3 + Math.random() * 0.7;
-      const height = baseHeight + (variance * levelFactor * randomFactor * 40);
+  const getWaveformBars = () => {
+    if (status !== 'recording' && status !== 'paused') return [];
+    return Array.from({ length: 32 }, (_, i) => {
+      const height = recordingStatus === 'paused'
+        ? 8
+        : 8 + Math.sin(i * 0.5) * 12 + audioLevel * 40;
       return Math.min(48, Math.max(4, height));
     });
   };
 
-  // Get transcript status display
   const getTranscriptStatus = (): { label: string; color: string; icon: React.ReactNode } => {
     if (speechError) {
       return { label: 'Error', color: 'bg-destructive/20 text-destructive', icon: <AlertCircle className="h-3 w-3" /> };
@@ -419,19 +426,23 @@ export function VoiceRecorder({ onComplete, onCancel }: VoiceRecorderProps) {
   const combinedError = recordingError || speechError;
   const status = recordingStatus;
 
-  // Combined transcript for display (final + interim)
   const liveTranscript = interimTranscript
     ? `${transcript} ${interimTranscript}`.trim()
     : transcript;
+  const transcriptBadgeLabel = (editedTranscript || transcript)
+    ? 'Captured'
+    : transcriptionStatus === 'transcribing'
+      ? 'Transcribing…'
+      : transcriptionStatus === 'failed'
+        ? 'Failed'
+        : 'Empty';
 
   return (
     <div className="space-y-6">
-      {/* Hidden audio element for playback */}
       {audioUrl && (
         <audio ref={audioRef} src={audioUrl} preload="metadata" />
       )}
 
-      {/* Error Message */}
       {combinedError && (
         <div className="flex items-start gap-3 p-4 rounded-xl bg-destructive/10 border border-destructive/20">
           <AlertCircle className="h-5 w-5 text-destructive shrink-0 mt-0.5" />
@@ -439,657 +450,468 @@ export function VoiceRecorder({ onComplete, onCancel }: VoiceRecorderProps) {
             <p className="text-sm font-medium text-destructive">Recording Error</p>
             <p className="text-sm text-destructive/80 mt-0.5">{combinedError}</p>
           </div>
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => status === 'permission-denied' ? requestPermission() : handleDiscard()}
-            className="shrink-0"
-          >
-            <RefreshCw className="h-4 w-4 mr-1" />
-            Retry
-          </Button>
         </div>
       )}
 
-      {/* Permission Denied State */}
-      {status === 'permission-denied' && !combinedError && (
-        <div className="flex flex-col items-center justify-center py-8 px-4 rounded-xl bg-muted/50 border border-dashed">
-          <div className="h-16 w-16 rounded-full bg-destructive/10 flex items-center justify-center mb-4">
-            <MicOff className="h-8 w-8 text-destructive" />
-          </div>
-          <h3 className="text-lg font-semibold mb-2">Microphone Access Required</h3>
-          <p className="text-sm text-muted-foreground text-center max-w-sm mb-4">
-            To record voice entries, please allow microphone access in your browser settings.
-          </p>
-          <div className="flex gap-2">
-            <Button variant="outline" onClick={onCancel}>
-              Cancel
-            </Button>
-            <Button onClick={requestPermission} className="gap-2">
-              <Settings className="h-4 w-4" />
-              Check Permission
-            </Button>
-          </div>
-        </div>
-      )}
-
-      {/* Requesting Permission State */}
-      {status === 'requesting-permission' && (
-        <div className="flex flex-col items-center justify-center py-12">
-          <div className="h-16 w-16 rounded-full bg-primary/10 flex items-center justify-center mb-4 animate-pulse">
-            <Mic className="h-8 w-8 text-primary" />
-          </div>
-          <p className="text-sm text-muted-foreground">Requesting microphone access...</p>
-        </div>
-      )}
-
-      {/* Idle / Ready State */}
-      {(status === 'idle' || status === 'ready') && !combinedError && (
-        <div className="flex flex-col items-center justify-center py-8">
-          <button
-            onClick={handleStartRecording}
-            className="group relative h-32 w-32 rounded-full bg-gradient-to-br from-primary/20 to-primary/5 border-2 border-primary/20 flex items-center justify-center transition-all hover:scale-105 hover:border-primary/40 hover:from-primary/30 hover:to-primary/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2"
-          >
-            <div className="h-20 w-20 rounded-full bg-primary flex items-center justify-center transition-transform group-hover:scale-105 shadow-lg">
-              <Mic className="h-10 w-10 text-primary-foreground" />
+      <div className="flex flex-col items-center text-center">
+        {status === 'idle' && (
+          <>
+            <div className="h-24 w-24 rounded-full bg-primary/10 flex items-center justify-center mb-6">
+              <Mic className="h-10 w-10 text-primary" />
             </div>
-            {/* Pulse rings */}
-            <div className="absolute inset-0 rounded-full border-2 border-primary/30 animate-ping" style={{ animationDuration: '2s' }} />
-          </button>
-          <p className="text-sm text-muted-foreground mt-6">
-            Tap to start recording
-          </p>
-          {!isSpeechSupported && (
-            <p className="text-xs text-warning mt-2 flex items-center gap-1">
-              <AlertCircle className="h-3 w-3" />
-              Live transcription not available in this browser
+            <h3 className="text-lg font-semibold mb-2">Ready to Record</h3>
+            <p className="text-sm text-muted-foreground mb-8 max-w-sm">
+              Share your thoughts, prayers, or reflections. AI will help summarize and extract insights.
             </p>
-          )}
-        </div>
-      )}
+            <Button size="lg" className="gap-2 rounded-full px-8 h-12" onClick={handleStartRecording}>
+              <Mic className="h-4 w-4" />
+              Start Recording
+            </Button>
+            {!isSpeechSupported && (
+              <p className="text-xs text-muted-foreground mt-4 max-w-sm">
+                Live speech recognition is not available in this browser. Audio is still recorded and transcription may fall back after recording.
+              </p>
+            )}
+            {onCancel && (
+              <Button variant="ghost" size="sm" className="mt-4" onClick={onCancel}>
+                Cancel
+              </Button>
+            )}
+          </>
+        )}
 
-      {/* Recording / Paused State */}
-      {(status === 'recording' || status === 'paused') && (
-        <div className="flex flex-col items-center justify-center py-4">
-          {/* Recording Indicator */}
-          <div className="relative mb-6">
-            <div className={cn(
-              'h-32 w-32 rounded-full flex items-center justify-center transition-all',
-              status === 'recording'
-                ? 'bg-destructive/20 animate-pulse'
-                : 'bg-warning/20'
-            )}>
+        {(status === 'recording' || status === 'paused') && (
+          <>
+            <div className="relative mb-6">
               <div className={cn(
-                'h-24 w-24 rounded-full flex items-center justify-center transition-all',
-                status === 'recording'
-                  ? 'bg-destructive/30'
-                  : 'bg-warning/30'
+                'h-24 w-24 rounded-full flex items-center justify-center transition-all duration-300',
+                status === 'recording' ? 'bg-destructive/10 ring-8 ring-destructive/5' : 'bg-warning/10'
               )}>
-                <div className={cn(
-                  'h-16 w-16 rounded-full flex items-center justify-center transition-all',
-                  status === 'recording'
-                    ? 'bg-destructive'
-                    : 'bg-warning'
-                )}>
-                  {status === 'recording' ? (
-                    <Mic className="h-8 w-8 text-white animate-pulse" />
-                  ) : (
-                    <Pause className="h-8 w-8 text-white" />
-                  )}
-                </div>
+                {status === 'recording' ? (
+                  <Mic className="h-10 w-10 text-destructive animate-pulse" />
+                ) : (
+                  <Pause className="h-10 w-10 text-warning" />
+                )}
               </div>
             </div>
 
-            {/* Audio Level Ring */}
-            {status === 'recording' && (
-              <div
-                className="absolute inset-0 rounded-full border-4 border-destructive/40 transition-transform"
-                style={{
-                  transform: `scale(${1 + (audioLevel / 150)})`,
-                  opacity: 0.3 + (audioLevel / 200)
-                }}
-              />
-            )}
-          </div>
+            <div className="mb-6">
+              <div className="text-4xl font-mono font-semibold mb-2">{formatTime(duration)}</div>
+              <Badge className={cn('text-xs', transcriptStatus.color)}>
+                {transcriptStatus.icon}
+                {transcriptStatus.label}
+              </Badge>
+            </div>
 
-          {/* Duration Display */}
-          <div className="text-5xl font-mono font-light mb-2 tracking-wider">
-            {formatTime(duration)}
-          </div>
+            <div className="h-12 flex items-center justify-center gap-1.5 mb-8 px-4 max-w-md w-full">
+              {getWaveformBars().map((height, i) => (
+                <div
+                  key={i}
+                  className={cn(
+                    'w-1.5 rounded-full transition-all duration-200',
+                    status === 'recording' ? 'bg-destructive/60' : 'bg-warning/60'
+                  )}
+                  style={{ height: `${height}px` }}
+                />
+              ))}
+            </div>
 
-          {/* Status Text */}
-          <div className="flex items-center gap-2 mb-4">
-            {status === 'recording' && (
-              <>
-                <span className="h-2 w-2 rounded-full bg-destructive animate-pulse" />
-                <span className="text-sm text-muted-foreground">Recording...</span>
-              </>
-            )}
-            {status === 'paused' && (
-              <>
-                <span className="h-2 w-2 rounded-full bg-warning" />
-                <span className="text-sm text-muted-foreground">Paused</span>
-              </>
-            )}
-          </div>
-
-          {/* Transcript Status Badge */}
-          {isSpeechSupported && (
-            <Badge className={cn('mb-4 gap-1.5', transcriptStatus.color)}>
-              {transcriptStatus.icon}
-              {transcriptStatus.label}
-            </Badge>
-          )}
-
-          {/* Waveform Visualization */}
-          <div className="flex items-center justify-center gap-[3px] h-12 mb-4 px-4">
-            {generateWaveformBars().map((height, i) => (
-              <div
-                key={i}
-                className={cn(
-                  'w-1.5 rounded-full transition-all duration-75',
-                  status === 'recording' ? 'bg-destructive' : 'bg-warning'
-                )}
-                style={{
-                  height: status === 'recording' ? `${height}px` : '4px',
-                  opacity: status === 'recording' ? 0.6 + (height / 80) : 0.3
-                }}
-              />
-            ))}
-          </div>
-
-          {/* Live Transcript Display */}
-          {isSpeechSupported && (liveTranscript || interimTranscript) && (
-            <div className="w-full max-w-md mb-6">
-              <div className="flex items-center gap-2 mb-2">
-                <FileText className="h-4 w-4 text-muted-foreground" />
-                <span className="text-xs font-medium text-muted-foreground">Live Transcript</span>
-              </div>
-              <div className="p-4 rounded-xl bg-muted/50 border max-h-32 overflow-y-auto">
-                <p className="text-sm leading-relaxed">
-                  {transcript && <span>{transcript} </span>}
+            {isSpeechSupported && (liveTranscript || interimTranscript) && (
+              <div className="w-full max-w-md mb-6 p-4 rounded-xl bg-muted/50 border max-h-32 overflow-y-auto">
+                <div className="flex items-center gap-2 mb-2">
+                  <FileText className="h-4 w-4 text-muted-foreground" />
+                  <span className="text-xs font-medium text-muted-foreground">Live Transcript</span>
+                </div>
+                <p className="text-sm text-left leading-relaxed">
+                  {transcript}
                   {interimTranscript && (
-                    <span className="text-muted-foreground italic">{interimTranscript}</span>
+                    <span className="text-muted-foreground italic"> {interimTranscript}</span>
                   )}
                   {!transcript && !interimTranscript && (
                     <span className="text-muted-foreground italic">Listening...</span>
                   )}
                 </p>
               </div>
-            </div>
-          )}
-
-          {/* Recording Controls */}
-          <div className="flex items-center gap-4">
-            {status === 'recording' ? (
-              <Button
-                variant="outline"
-                size="icon"
-                className="h-14 w-14 rounded-full"
-                onClick={handlePauseRecording}
-              >
-                <Pause className="h-6 w-6" />
-              </Button>
-            ) : (
-              <Button
-                variant="outline"
-                size="icon"
-                className="h-14 w-14 rounded-full"
-                onClick={handleResumeRecording}
-              >
-                <Play className="h-6 w-6 ml-0.5" />
-              </Button>
             )}
-            <Button
-              variant="destructive"
-              size="icon"
-              className="h-16 w-16 rounded-full shadow-lg"
-              onClick={handleStop}
-            >
-              <Square className="h-7 w-7" />
-            </Button>
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-14 w-14 rounded-full text-muted-foreground hover:text-destructive"
-              onClick={handleDiscard}
-            >
-              <Trash2 className="h-5 w-5" />
-            </Button>
-          </div>
-        </div>
-      )}
 
-      {/* Processing State */}
-      {status === 'processing' && (
-        <div className="flex flex-col items-center justify-center py-12">
-          <div className="h-16 w-16 rounded-full bg-primary/10 flex items-center justify-center mb-4">
-            <Loader2 className="h-8 w-8 text-primary animate-spin" />
-          </div>
-          <p className="text-sm text-muted-foreground">Processing recording...</p>
-        </div>
-      )}
-
-      {/* Completed State with Playback */}
-      {status === 'completed' && audioUrl && (
-        <div className="flex flex-col items-center justify-center py-4">
-          {/* Success Indicator */}
-          <div className="h-20 w-20 rounded-full bg-success/20 flex items-center justify-center mb-4">
-            <CheckCircle2 className="h-10 w-10 text-success" />
-          </div>
-
-          <h3 className="text-lg font-semibold mb-1">Recording Complete</h3>
-          <p className="text-sm text-muted-foreground mb-6">
-            {formatTime(duration)} recorded
-          </p>
-
-          {/* Playback Controls */}
-          <div className="w-full max-w-sm space-y-4 mb-6">
-            <div className="flex items-center gap-3 p-4 rounded-xl bg-muted/50 border">
-              <Button
-                variant="outline"
-                size="icon"
-                className="h-12 w-12 rounded-full shrink-0"
-                onClick={togglePlayback}
-              >
-                {isPlaying ? (
+            <div className="flex items-center gap-3">
+              {status === 'recording' ? (
+                <Button variant="outline" size="icon" className="h-12 w-12 rounded-full" onClick={handlePauseRecording}>
                   <Pause className="h-5 w-5" />
-                ) : (
+                </Button>
+              ) : (
+                <Button variant="outline" size="icon" className="h-12 w-12 rounded-full" onClick={handleResumeRecording}>
                   <Play className="h-5 w-5 ml-0.5" />
-                )}
-              </Button>
-              <div className="flex-1">
-                <Progress value={playbackProgress} className="h-2" />
-                <div className="flex items-center justify-between mt-1.5 text-xs text-muted-foreground">
-                  <span>{formatTime(Math.floor((playbackProgress / 100) * duration))}</span>
-                  <span>{formatTime(duration)}</span>
-                </div>
-              </div>
-              <Volume2 className="h-4 w-4 text-muted-foreground shrink-0" />
-            </div>
-          </div>
-
-          {/* Transcript Section */}
-          <div className="w-full max-w-md mb-6">
-            <div className="flex items-center justify-between mb-2">
-              <div className="flex items-center gap-2">
-                <FileText className="h-4 w-4 text-muted-foreground" />
-                <span className="text-sm font-medium">Transcript</span>
-                <Badge className={cn('text-[10px]', transcriptStatus.color)}>
-                  {transcriptStatus.icon}
-                  {(editedTranscript || transcript) ? 'Captured' : isAudioTranscribing ? 'Transcribing…' : 'Empty'}
-                </Badge>
-              </div>
-              {(transcript || editedTranscript) && !isEditingTranscript && (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="h-7 gap-1 text-xs"
-                  onClick={() => setIsEditingTranscript(true)}
-                >
-                  <Edit3 className="h-3 w-3" />
-                  Edit
                 </Button>
               )}
-              {isEditingTranscript && (
-                <div className="flex items-center gap-1">
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="h-7 w-7 p-0"
-                    onClick={() => {
-                      setIsEditingTranscript(false);
-                      setEditedTranscript(transcript);
-                    }}
-                  >
-                    <X className="h-3 w-3" />
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="h-7 w-7 p-0 text-success"
-                    onClick={() => setIsEditingTranscript(false)}
-                  >
-                    <Check className="h-3 w-3" />
-                  </Button>
+              <Button variant="destructive" size="icon" className="h-16 w-16 rounded-full" onClick={handleStop}>
+                <Square className="h-6 w-6 fill-current" />
+              </Button>
+              <Button variant="outline" size="icon" className="h-12 w-12 rounded-full" onClick={handleDiscard}>
+                <Trash2 className="h-5 w-5" />
+              </Button>
+            </div>
+          </>
+        )}
+
+        {status === 'completed' && audioUrl && (
+          <>
+            <div className="h-20 w-20 rounded-full bg-success/10 flex items-center justify-center mb-4">
+              <CheckCircle2 className="h-10 w-10 text-success" />
+            </div>
+
+            <h3 className="text-lg font-semibold mb-1">Recording Complete</h3>
+            <p className="text-sm text-muted-foreground mb-6">
+              {formatTime(duration)} recorded
+            </p>
+
+            <div className="w-full max-w-sm space-y-4 mb-6">
+              <div className="flex items-center gap-3 p-4 rounded-xl bg-muted/50 border">
+                <Button variant="outline" size="icon" className="h-12 w-12 rounded-full shrink-0" onClick={togglePlayback}>
+                  {isPlaying ? (
+                    <Pause className="h-5 w-5" />
+                  ) : (
+                    <Play className="h-5 w-5 ml-0.5" />
+                  )}
+                </Button>
+                <div className="flex-1">
+                  <Progress value={playbackProgress} className="h-2" />
+                  <div className="flex items-center justify-between mt-1.5 text-xs text-muted-foreground">
+                    <span>{formatTime(Math.floor((playbackProgress / 100) * duration))}</span>
+                    <span>{formatTime(duration)}</span>
+                  </div>
                 </div>
+                <Volume2 className="h-4 w-4 text-muted-foreground shrink-0" />
+              </div>
+            </div>
+
+            <div className="w-full max-w-md mb-6">
+              <div className="flex items-center justify-between mb-2">
+                <div className="flex items-center gap-2">
+                  <FileText className="h-4 w-4 text-muted-foreground" />
+                  <span className="text-sm font-medium">Transcript</span>
+                  <Badge className={cn('text-[10px]', transcriptStatus.color)}>
+                    {transcriptStatus.icon}
+                    {transcriptBadgeLabel}
+                  </Badge>
+                </div>
+                {(transcript || editedTranscript) && !isEditingTranscript && (
+                  <Button variant="ghost" size="sm" className="h-7 gap-1 text-xs" onClick={() => setIsEditingTranscript(true)}>
+                    <Edit3 className="h-3 w-3" />
+                    Edit
+                  </Button>
+                )}
+                {isEditingTranscript && (
+                  <div className="flex items-center gap-1">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-7 w-7 p-0"
+                      onClick={() => {
+                        setIsEditingTranscript(false);
+                        setEditedTranscript(transcript);
+                      }}
+                    >
+                      <X className="h-3 w-3" />
+                    </Button>
+                    <Button variant="ghost" size="sm" className="h-7 w-7 p-0 text-success" onClick={() => setIsEditingTranscript(false)}>
+                      <Check className="h-3 w-3" />
+                    </Button>
+                  </div>
+                )}
+              </div>
+
+              {transcriptionStatus === 'transcribing' && !(editedTranscript || transcript) && (
+                <div className="p-3 rounded-xl bg-primary/5 border border-primary/20 mb-3 flex items-start gap-3">
+                  <Loader2 className="h-4 w-4 text-primary animate-spin shrink-0 mt-0.5" />
+                  <div className="flex-1 text-left">
+                    <p className="text-sm font-medium text-primary">Transcribing recording</p>
+                    <p className="text-xs text-muted-foreground mt-0.5">
+                      We&apos;re converting your audio to text before analysis starts.
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              {transcriptionStatus === 'failed' && !isEditingTranscript && (
+                <div className="p-3 rounded-xl bg-destructive/10 border border-destructive/20 mb-3 flex items-start gap-3">
+                  <AlertCircle className="h-4 w-4 text-destructive shrink-0 mt-0.5" />
+                  <div className="flex-1 text-left">
+                    <p className="text-sm font-medium text-destructive">Transcription failed</p>
+                    <p className="text-xs text-destructive/80 mt-0.5">
+                      {transcriptionError ?? 'Could not transcribe audio. You can add your transcript manually.'}
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              {isEditingTranscript ? (
+                <Textarea
+                  value={editedTranscript}
+                  onChange={(e) => setEditedTranscript(e.target.value)}
+                  placeholder="Edit or add your transcript here..."
+                  className="min-h-[120px] text-sm"
+                  autoFocus
+                />
+              ) : (
+                <div className="p-4 rounded-xl bg-muted/50 border min-h-[80px] max-h-40 overflow-y-auto">
+                  {editedTranscript || transcript ? (
+                    <p className="text-sm leading-relaxed whitespace-pre-wrap">
+                      {editedTranscript || transcript}
+                    </p>
+                  ) : transcriptionStatus === 'transcribing' ? (
+                    <span className="flex items-center gap-2 text-sm text-muted-foreground">
+                      <Loader2 className="h-3.5 w-3.5 animate-spin shrink-0" />
+                      Transcribing audio…
+                    </span>
+                  ) : transcriptionStatus === 'failed' ? (
+                    <p className="text-sm text-muted-foreground italic">
+                      Transcription did not return text. Add your transcript manually to continue.
+                    </p>
+                  ) : (
+                    <p className="text-sm text-muted-foreground italic">
+                      {isSpeechSupported
+                        ? 'No transcript captured. You can add one manually.'
+                        : 'Live transcription not available. You can add a transcript manually.'}
+                    </p>
+                  )}
+                </div>
+              )}
+
+              {!transcript && !editedTranscript && transcriptionStatus !== 'transcribing' && (
+                <Button variant="link" size="sm" className="mt-2 h-auto p-0 text-xs" onClick={() => setIsEditingTranscript(true)}>
+                  + Add transcript manually
+                </Button>
               )}
             </div>
 
-            {isEditingTranscript ? (
-              <Textarea
-                value={editedTranscript}
-                onChange={(e) => setEditedTranscript(e.target.value)}
-                placeholder="Edit or add your transcript here..."
-                className="min-h-[120px] text-sm"
-                autoFocus
-              />
-            ) : (
-              <div className="p-4 rounded-xl bg-muted/50 border min-h-[80px] max-h-40 overflow-y-auto">
-                {editedTranscript || transcript ? (
-                  <p className="text-sm leading-relaxed whitespace-pre-wrap">
-                    {editedTranscript || transcript}
-                  </p>
-                ) : isAudioTranscribing ? (
-                  <span className="flex items-center gap-2 text-sm text-muted-foreground">
-                    <Loader2 className="h-3.5 w-3.5 animate-spin shrink-0" />
-                    Transcribing audio…
-                  </span>
-                ) : (
-                  <p className="text-sm text-muted-foreground italic">
-                    {isSpeechSupported
-                      ? "No transcript captured. You can add one manually."
-                      : "Live transcription not available. You can add a transcript manually."}
-                  </p>
+            {(transcript || editedTranscript) && (
+              <div className="w-full max-w-md mb-6">
+                {processingStatus === 'processing' && (
+                  <div className="p-4 rounded-xl bg-primary/5 border border-primary/20 mb-4">
+                    <div className="flex items-center gap-3 mb-3">
+                      <div className="h-8 w-8 rounded-full bg-primary/10 flex items-center justify-center">
+                        <Loader2 className="h-4 w-4 text-primary animate-spin" />
+                      </div>
+                      <div className="flex-1">
+                        <p className="text-sm font-medium">
+                          {processingProgress < 30 && 'Connecting to AI...'}
+                          {processingProgress >= 30 && processingProgress < 60 && 'Analyzing transcript...'}
+                          {processingProgress >= 60 && processingProgress < 90 && 'Extracting insights...'}
+                          {processingProgress >= 90 && 'Finalizing...'}
+                        </p>
+                        <p className="text-xs text-muted-foreground">AI-powered analysis</p>
+                      </div>
+                    </div>
+                    <Progress value={processingProgress} className="h-1.5" />
+                  </div>
                 )}
-              </div>
-            )}
 
-            {!transcript && !editedTranscript && !isAudioTranscribing && (
-              <Button
-                variant="link"
-                size="sm"
-                className="mt-2 h-auto p-0 text-xs"
-                onClick={() => setIsEditingTranscript(true)}
-              >
-                + Add transcript manually
-              </Button>
-            )}
-          </div>
-
-          {/* AI Processing Section */}
-          {(transcript || editedTranscript) && (
-            <div className="w-full max-w-md mb-6">
-              {/* Processing Status */}
-              {processingStatus === 'processing' && (
-                <div className="p-4 rounded-xl bg-primary/5 border border-primary/20 mb-4">
-                  <div className="flex items-center gap-3 mb-3">
-                    <div className="h-8 w-8 rounded-full bg-primary/10 flex items-center justify-center">
-                      <Loader2 className="h-4 w-4 text-primary animate-spin" />
-                    </div>
+                {processingStatus === 'error' && processingError && (
+                  <div className="p-3 rounded-xl bg-destructive/10 border border-destructive/20 mb-4 flex items-start gap-3">
+                    <AlertCircle className="h-4 w-4 text-destructive shrink-0 mt-0.5" />
                     <div className="flex-1">
-                      <p className="text-sm font-medium">
-                        {processingProgress < 30 && 'Connecting to AI...'}
-                        {processingProgress >= 30 && processingProgress < 60 && 'Analyzing transcript...'}
-                        {processingProgress >= 60 && processingProgress < 90 && 'Extracting insights...'}
-                        {processingProgress >= 90 && 'Finalizing...'}
-                      </p>
-                      <p className="text-xs text-muted-foreground">AI-powered analysis</p>
-                    </div>
-                  </div>
-                  <Progress value={processingProgress} className="h-1.5" />
-                </div>
-              )}
-
-              {/* Processing Error */}
-              {processingStatus === 'error' && processingError && (
-                <div className="p-3 rounded-xl bg-destructive/10 border border-destructive/20 mb-4 flex items-start gap-3">
-                  <AlertCircle className="h-4 w-4 text-destructive shrink-0 mt-0.5" />
-                  <div className="flex-1">
-                    <p className="text-sm text-destructive font-medium">Analysis failed</p>
-                    <p className="text-xs text-destructive/80 mt-0.5">{processingError}</p>
-                  </div>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="shrink-0 text-xs gap-1"
-                    onClick={() => {
-                      const t = editedTranscript || transcript;
-                      if (t) {
-                        captureMessage('User retried transcript processing after error', 'info', { context: 'diary:process' });
-                        toast.info('Retrying analysis…');
-                        processTranscript(t);
-                      }
-                    }}
-                  >
-                    <RefreshCw className="h-3 w-3" />
-                    Retry
-                  </Button>
-                </div>
-              )}
-
-              {/* Processing Timed Out */}
-              {processingStatus === 'timedOut' && (
-                <div className="p-3 rounded-xl bg-warning/10 border border-warning/30 mb-4 flex items-start gap-3">
-                  <AlertCircle className="h-4 w-4 text-warning shrink-0 mt-0.5" />
-                  <div className="flex-1">
-                    <p className="text-sm text-warning font-medium">Analysis timed out</p>
-                    <p className="text-xs text-warning/80 mt-0.5">
-                      The AI took too long. You can retry or save without analysis — your recording is safe.
-                    </p>
-                  </div>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="shrink-0 text-xs gap-1"
-                    onClick={() => {
-                      const t = editedTranscript || transcript;
-                      if (t) {
-                        captureMessage('User retried transcript processing after timeout', 'info', { context: 'diary:process' });
-                        toast.info('Retrying analysis…');
-                        processTranscript(t);
-                      }
-                    }}
-                  >
-                    <RefreshCw className="h-3 w-3" />
-                    Retry
-                  </Button>
-                </div>
-              )}
-
-              {/* Processed Results */}
-              {processingStatus === 'completed' && processedResult && (
-                <div className="space-y-4">
-                  {/* Toggle View */}
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <Sparkles className="h-4 w-4 text-primary" />
-                      <span className="text-sm font-medium">AI Analysis</span>
-                      {isUsingFallback ? (
-                        <Badge variant="outline" className="text-[10px] text-muted-foreground">
-                          Local
-                        </Badge>
-                      ) : (
-                        <Badge variant="outline" className="text-[10px] text-primary border-primary/30">
-                          OpenAI
-                        </Badge>
-                      )}
+                      <p className="text-sm text-destructive font-medium">Analysis failed</p>
+                      <p className="text-xs text-destructive/80 mt-0.5">{processingError}</p>
                     </div>
                     <Button
                       variant="ghost"
                       size="sm"
-                      className="h-7 text-xs"
-                      onClick={() => setShowProcessedView(!showProcessedView)}
+                      className="shrink-0 text-xs gap-1"
+                      onClick={() => {
+                        const t = editedTranscript || transcript;
+                        if (t) {
+                          captureMessage('User retried transcript processing after error', 'info', { context: 'diary:process' });
+                          toast.info('Retrying analysis…');
+                          processTranscript(t);
+                        }
+                      }}
                     >
-                      {showProcessedView ? 'Hide Details' : 'Show Details'}
+                      <RefreshCw className="h-3 w-3" />
+                      Retry
                     </Button>
                   </div>
+                )}
 
-                  {/* Summary Card */}
-                  <div className="p-4 rounded-xl bg-primary/5 border border-primary/20">
-                    <div className="flex items-start justify-between gap-2 mb-2">
-                      <span className="text-xs font-medium text-primary uppercase tracking-wider">Summary</span>
-                      {processedResult.mood && (
-                        <Badge variant="secondary" className="text-[10px] capitalize">
-                          {getMoodEmoji(processedResult.mood)} {processedResult.mood}
-                        </Badge>
-                      )}
+                {processingStatus === 'timedOut' && (
+                  <div className="p-3 rounded-xl bg-warning/10 border border-warning/30 mb-4 flex items-start gap-3">
+                    <AlertCircle className="h-4 w-4 text-warning shrink-0 mt-0.5" />
+                    <div className="flex-1">
+                      <p className="text-sm text-warning font-medium">Analysis timed out</p>
+                      <p className="text-xs text-warning/80 mt-0.5">
+                        The AI took too long. You can retry or save without analysis — your recording is safe.
+                      </p>
                     </div>
-                    <p className="text-sm leading-relaxed">
-                      {processedResult.summary}
-                    </p>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="shrink-0 text-xs gap-1"
+                      onClick={() => {
+                        const t = editedTranscript || transcript;
+                        if (t) {
+                          captureMessage('User retried transcript processing after timeout', 'info', { context: 'diary:process' });
+                          toast.info('Retrying analysis…');
+                          processTranscript(t);
+                        }
+                      }}
+                    >
+                      <RefreshCw className="h-3 w-3" />
+                      Retry
+                    </Button>
                   </div>
+                )}
 
-                  {showProcessedView && (
-                    <>
-                      {/* Key Topics */}
-                      {processedResult.keyTopics.length > 0 && (
-                        <div className="p-3 rounded-xl bg-muted/50 border">
-                          <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Topics</span>
-                          <div className="flex flex-wrap gap-1.5 mt-2">
-                            {processedResult.keyTopics.map((topic, idx) => (
-                              <Badge key={idx} variant="secondary" className="text-xs">
-                                {topic}
-                              </Badge>
-                            ))}
+                {processingStatus === 'completed' && processedResult && (
+                  <div className="space-y-4">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <Sparkles className="h-4 w-4 text-primary" />
+                        <span className="text-sm font-medium">AI Analysis</span>
+                        {isUsingFallback ? (
+                          <Badge variant="outline" className="text-[10px] text-muted-foreground">
+                            Local
+                          </Badge>
+                        ) : (
+                          <Badge variant="outline" className="text-[10px] text-primary border-primary/30">
+                            OpenAI
+                          </Badge>
+                        )}
+                      </div>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-7 text-xs"
+                        onClick={() => setShowProcessedView(!showProcessedView)}
+                      >
+                        {showProcessedView ? 'Hide Details' : 'Show Details'}
+                      </Button>
+                    </div>
+
+                    <div className="p-4 rounded-xl bg-primary/5 border border-primary/20">
+                      <div className="flex items-start justify-between gap-2 mb-2">
+                        <span className="text-xs font-medium text-primary uppercase tracking-wider">Summary</span>
+                        {processedResult.mood && (
+                          <Badge variant="secondary" className="text-[10px] capitalize">
+                            {getMoodEmoji(processedResult.mood)} {processedResult.mood}
+                          </Badge>
+                        )}
+                      </div>
+                      <p className="text-sm leading-relaxed">
+                        {processedResult.summary}
+                      </p>
+                    </div>
+
+                    {showProcessedView && (
+                      <>
+                        {processedResult.keyTopics.length > 0 && (
+                          <div className="p-3 rounded-xl bg-muted/50 border">
+                            <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Topics</span>
+                            <div className="flex flex-wrap gap-1.5 mt-2">
+                              {processedResult.keyTopics.map((topic, idx) => (
+                                <Badge key={idx} variant="secondary" className="text-xs">
+                                  {topic}
+                                </Badge>
+                              ))}
+                            </div>
                           </div>
-                        </div>
-                      )}
+                        )}
 
-                      {/* Action Items */}
-                      {processedResult.actionItems.length > 0 && (
-                        <div className="p-3 rounded-xl bg-success/5 border border-success/20">
-                          <span className="text-xs font-medium text-success uppercase tracking-wider flex items-center gap-1.5">
-                            <Target className="h-3 w-3" />
-                            Action Items
-                          </span>
-                          <ul className="mt-2 space-y-1.5">
-                            {processedResult.actionItems.map((item, idx) => (
-                              <li key={idx} className="text-sm flex items-start gap-2">
-                                <CheckCircle2 className="h-3.5 w-3.5 text-success shrink-0 mt-0.5" />
-                                <span>{item}</span>
-                              </li>
-                            ))}
-                          </ul>
-                        </div>
-                      )}
+                        {processedResult.actionItems.length > 0 && (
+                          <div className="p-3 rounded-xl bg-success/5 border border-success/20">
+                            <span className="text-xs font-medium text-success uppercase tracking-wider flex items-center gap-1.5">
+                              <Target className="h-3 w-3" />
+                              Action Items
+                            </span>
+                            <ul className="mt-2 space-y-1.5">
+                              {processedResult.actionItems.map((item, idx) => (
+                                <li key={idx} className="text-sm flex items-start gap-2">
+                                  <CheckCircle2 className="h-3.5 w-3.5 text-success shrink-0 mt-0.5" />
+                                  <span>{item}</span>
+                                </li>
+                              ))}
+                            </ul>
+                          </div>
+                        )}
 
-                      {/* Prayer Points */}
-                      {processedResult.prayerPoints.length > 0 && (
-                        <div className="p-3 rounded-xl bg-[hsl(var(--spiritual))]/5 border border-[hsl(var(--spiritual))]/20">
-                          <span className="text-xs font-medium text-[hsl(var(--spiritual))] uppercase tracking-wider flex items-center gap-1.5">
-                            <Heart className="h-3 w-3" />
-                            Prayer Points
-                          </span>
-                          <ul className="mt-2 space-y-1.5">
-                            {processedResult.prayerPoints.map((point, idx) => (
-                              <li key={idx} className="text-sm flex items-start gap-2">
-                                <span className="text-[hsl(var(--spiritual))]">•</span>
-                                <span className="italic">{point}</span>
-                              </li>
-                            ))}
-                          </ul>
-                        </div>
-                      )}
+                        {processedResult.prayerPoints.length > 0 && (
+                          <div className="p-3 rounded-xl bg-[hsl(var(--spiritual))]/5 border border-[hsl(var(--spiritual))]/20">
+                            <span className="text-xs font-medium text-[hsl(var(--spiritual))] uppercase tracking-wider flex items-center gap-1.5">
+                              <Heart className="h-3 w-3" />
+                              Prayer Points
+                            </span>
+                            <ul className="mt-2 space-y-1.5">
+                              {processedResult.prayerPoints.map((point, idx) => (
+                                <li key={idx} className="text-sm flex items-start gap-2">
+                                  <span className="text-[hsl(var(--spiritual))]">•</span>
+                                  <span className="italic">{point}</span>
+                                </li>
+                              ))}
+                            </ul>
+                          </div>
+                        )}
 
-                      {/* Coaching Insight (OpenAI only) */}
-                      {processedResult.coachingInsight && !isUsingFallback && (
-                        <div className="p-3 rounded-xl bg-accent/10 border border-accent/30">
-                          <span className="text-xs font-medium text-accent uppercase tracking-wider flex items-center gap-1.5">
-                            <Sparkles className="h-3 w-3" />
-                            Coaching Insight
-                          </span>
-                          <p className="text-sm mt-2 leading-relaxed italic">
-                            "{processedResult.coachingInsight}"
+                        {processedResult.coachingInsight && !isUsingFallback && (
+                          <div className="p-3 rounded-xl bg-accent/10 border border-accent/30">
+                            <span className="text-xs font-medium text-accent uppercase tracking-wider flex items-center gap-1.5">
+                              <Sparkles className="h-3 w-3" />
+                              Coaching Insight
+                            </span>
+                            <p className="mt-2 text-sm italic leading-relaxed">
+                              &quot;{processedResult.coachingInsight}&quot;
+                            </p>
+                          </div>
+                        )}
+
+                        {processedResult.scriptureReferences && processedResult.scriptureReferences.length > 0 && (
+                          <div className="space-y-2">
+                            <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider flex items-center gap-1.5">
+                              <BookMarked className="h-3 w-3" />
+                              Scripture References
+                            </span>
+                            <ScriptureList references={processedResult.scriptureReferences} />
+                          </div>
+                        )}
+
+                        <div className="p-3 rounded-xl bg-muted/50 border">
+                          <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Cleaned Transcript</span>
+                          <p className="mt-2 text-sm leading-relaxed whitespace-pre-wrap text-muted-foreground">
+                            {processedResult.cleanedTranscript}
                           </p>
                         </div>
-                      )}
-
-                      {/* Scripture References */}
-                      {processedResult.scriptureReferences && processedResult.scriptureReferences.length > 0 && (
-                        <div className="space-y-2">
-                          <span className="text-xs font-medium text-accent uppercase tracking-wider flex items-center gap-1.5 px-1">
-                            <BookMarked className="h-3 w-3" />
-                            Scripture Referenced
-                          </span>
-                          <ScriptureList
-                            references={processedResult.scriptureReferences}
-                            compact
-                            maxDisplay={3}
-                          />
-                        </div>
-                      )}
-
-                      {/* Cleaned Transcript */}
-                      <div className="p-3 rounded-xl bg-muted/50 border">
-                        <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Cleaned Transcript</span>
-                        <p className="text-sm mt-2 leading-relaxed text-muted-foreground">
-                          {processedResult.cleanedTranscript}
-                        </p>
-                      </div>
-                    </>
-                  )}
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* Action Buttons */}
-          <div className="flex items-center gap-3">
-            <Button
-              variant="outline"
-              onClick={handleDiscard}
-              disabled={isSaving}
-              className="gap-2"
-            >
-              <Trash2 className="h-4 w-4" />
-              Discard
-            </Button>
-            <Button
-              variant="outline"
-              onClick={() => {
-                handleDiscard();
-                setTimeout(handleStartRecording, 100);
-              }}
-              disabled={isSaving}
-              className="gap-2"
-            >
-              <RefreshCw className="h-4 w-4" />
-              Re-record
-            </Button>
-            <Button
-              onClick={handleSave}
-              disabled={isSaving}
-              className="gap-2 min-w-[120px]"
-            >
-              {isSaving ? (
-                <>
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                  Saving...
-                </>
-              ) : (
-                <>
-                  <Save className="h-4 w-4" />
-                  Save Entry
-                </>
-              )}
-            </Button>
-          </div>
-        </div>
-      )}
-
-      {/* Saving Progress */}
-      {isSaving && (
-        <div className="space-y-3 pt-4 border-t">
-          <div className="flex items-center justify-between text-sm">
-            <span className="text-muted-foreground">Saving audio...</span>
-            <CheckCircle2 className="h-4 w-4 text-success" />
-          </div>
-          <div className="flex items-center justify-between text-sm">
-            <span className="text-muted-foreground">Saving transcript...</span>
-            {(editedTranscript || transcript) ? (
-              <CheckCircle2 className="h-4 w-4 text-success" />
-            ) : (
-              <span className="text-xs text-muted-foreground">Skipped</span>
+                      </>
+                    )}
+                  </div>
+                )}
+              </div>
             )}
-          </div>
-          <div className="flex items-center justify-between text-sm">
-            <span className="text-muted-foreground">Generating insights...</span>
-            <Loader2 className="h-4 w-4 animate-spin text-primary" />
-          </div>
-        </div>
-      )}
 
-      {/* Tips (shown in idle state) */}
-      {(status === 'idle' || status === 'ready') && !combinedError && (
-        <div className="p-4 rounded-xl bg-muted/30 border border-dashed">
-          <p className="text-sm text-muted-foreground text-center leading-relaxed">
-            Speak freely about your day, thoughts, struggles, or gratitude.
-            <br />
-            Your words will be preserved, transcribed, and transformed into wisdom.
-          </p>
-        </div>
-      )}
+            <div className="flex items-center gap-3">
+              <Button variant="outline" size="lg" className="gap-2 flex-1" onClick={handleDiscard}>
+                <Trash2 className="h-4 w-4" />
+                Discard
+              </Button>
+              <Button
+                size="lg"
+                className="gap-2 flex-1"
+                onClick={handleSave}
+                disabled={isSaving || (transcriptionStatus === 'transcribing' && !(editedTranscript || transcript))}
+              >
+                {isSaving ? (
+                  <>
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    Saving...
+                  </>
+                ) : (
+                  <>
+                    <Save className="h-4 w-4" />
+                    Save Entry
+                  </>
+                )}
+              </Button>
+            </div>
+          </>
+        )}
+      </div>
     </div>
   );
 }

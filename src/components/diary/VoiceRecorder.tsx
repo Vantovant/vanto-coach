@@ -65,6 +65,14 @@ type PersistedAudioRecovery = {
 
 const RECOVERY_STORAGE_KEY = 'vanto-coach:pending-audio-recovery';
 
+type TranscribeRouteResponse = {
+  success?: boolean;
+  transcript?: string;
+  error?: string;
+  errorCode?: string;
+  missing_env?: string;
+};
+
 function readRecoveryState(): PersistedAudioRecovery | null {
   if (typeof window === 'undefined') return null;
   try {
@@ -153,6 +161,8 @@ export function VoiceRecorder({ onComplete, onCancel }: VoiceRecorderProps) {
     try {
       const storagePath = await uploadAudio(blob, mimeType);
       if (!storagePath) {
+        setTranscriptionError('Recorded audio could not be uploaded for recovery. Retry may not survive refresh.');
+        captureMessage('Audio recovery upload failed', 'warning', { context: 'diary:audioPersist' });
         return null;
       }
 
@@ -184,21 +194,44 @@ export function VoiceRecorder({ onComplete, onCancel }: VoiceRecorderProps) {
       form.append('audio', blob);
       form.append('mimeType', mimeType);
 
-      const response = await fetch('/api/ai/transcribe', {
-        method: 'POST',
-        body: form,
-      });
+      let response: Response;
+      try {
+        response = await fetch('/api/ai/transcribe', {
+          method: 'POST',
+          body: form,
+        });
+      } catch (requestErr) {
+        captureError(requestErr, { context: 'diary:audioTranscribe', operation: 'request-route', isRetry: options?.isRetry ?? false });
+        setTranscriptionStatus('failed');
+        setTranscriptionError('The transcription request could not reach the server. You can retry or type your transcript manually.');
+        toast.error('Transcription request failed', {
+          description: 'The transcription request could not reach the server. You can retry or type your transcript manually.',
+        });
+        return;
+      }
+
+      let data: TranscribeRouteResponse | null = null;
+      try {
+        data = await response.json();
+      } catch (parseErr) {
+        captureError(parseErr, { context: 'diary:audioTranscribe', operation: 'parse-route-response', isRetry: options?.isRetry ?? false });
+        setTranscriptionStatus('failed');
+        setTranscriptionError('The server returned an unreadable transcription response. You can retry or type your transcript manually.');
+        toast.error('Unreadable transcription response', {
+          description: 'The server returned an unreadable transcription response. You can retry or type your transcript manually.',
+        });
+        return;
+      }
 
       if (!response.ok) {
-        const data = await response.json().catch(() => ({}));
-        const message = typeof data.error === 'string' && data.error.trim().length > 0
+        const message = typeof data?.error === 'string' && data.error.trim().length > 0
           ? data.error
           : 'Could not transcribe audio. You can type your transcript manually.';
 
         setTranscriptionStatus('failed');
         setTranscriptionError(message);
 
-        if (data.missing_env) {
+        if (data?.missing_env) {
           captureMessage(data.error ?? 'Audio transcription unavailable', 'warning', {
             context: 'diary:audioTranscribe',
             missing_env: data.missing_env,
@@ -215,8 +248,7 @@ export function VoiceRecorder({ onComplete, onCancel }: VoiceRecorderProps) {
         return;
       }
 
-      const data = await response.json();
-      if (data.success && data.transcript && data.transcript.trim().length > 0) {
+      if (data?.success && data.transcript && data.transcript.trim().length > 0) {
         setTranscriptionStatus('succeeded');
         setTranscriptionError(null);
         setEditedTranscript(data.transcript);
@@ -233,19 +265,22 @@ export function VoiceRecorder({ onComplete, onCancel }: VoiceRecorderProps) {
             ? 'Transcript captured from your existing recording.'
             : 'Transcript captured from your recording.',
         });
-      } else if (data.success) {
+      } else if (data?.errorCode === 'empty_transcript' || data?.success === false) {
+        const message = typeof data?.error === 'string' && data.error.trim().length > 0
+          ? data.error
+          : 'The transcription service returned no text from this recording.';
         setTranscriptionStatus('failed');
-        setTranscriptionError('No words were found in the recording. You can add a transcript manually.');
+        setTranscriptionError(message);
         toast.warning('No speech detected', {
-          description: 'No words were found in the recording. You can add a transcript manually.',
+          description: message,
         });
       }
     } catch (err) {
       captureError(err, { context: 'diary:audioTranscribe', isRetry: options?.isRetry ?? false });
       setTranscriptionStatus('failed');
-      setTranscriptionError('Could not transcribe audio right now. You can add your transcript manually and continue.');
+      setTranscriptionError('The transcription request failed unexpectedly. You can retry or type your transcript manually.');
       toast.error('Transcription failed', {
-        description: 'Could not transcribe audio right now. You can add your transcript manually and continue.',
+        description: 'The transcription request failed unexpectedly. You can retry or type your transcript manually.',
       });
     } finally {
       setIsAudioTranscribing(false);
@@ -266,9 +301,9 @@ export function VoiceRecorder({ onComplete, onCancel }: VoiceRecorderProps) {
     const recoveredBlob = await downloadAudio(persistedAudioPath);
     if (!recoveredBlob) {
       setTranscriptionStatus('failed');
-      setTranscriptionError('Saved audio could not be recovered. You can type your transcript manually or re-record.');
+      setTranscriptionError('Saved audio could not be recovered for retry. You can type your transcript manually or re-record.');
       toast.error('Recovery failed', {
-        description: 'Saved audio could not be recovered. You can type your transcript manually or re-record.',
+        description: 'Saved audio could not be recovered for retry. You can type your transcript manually or re-record.',
       });
       return;
     }

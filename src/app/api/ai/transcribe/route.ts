@@ -28,12 +28,37 @@ export async function POST(request: NextRequest) {
     formData = await request.formData();
   } catch (e) {
     captureError(e, { context: 'api:transcribe', operation: 'parse-form' });
-    return NextResponse.json({ success: false, error: 'Invalid form data' }, { status: 400 });
+    return NextResponse.json(
+      {
+        success: false,
+        error: 'The server could not read the transcription upload.',
+        errorCode: 'form_parse_failed',
+      },
+      { status: 400 }
+    );
   }
 
   const audioEntry = formData.get('audio');
-  if (!audioEntry || !(audioEntry instanceof Blob)) {
-    return NextResponse.json({ success: false, error: 'No audio blob provided' }, { status: 400 });
+  if (!audioEntry) {
+    return NextResponse.json(
+      {
+        success: false,
+        error: 'No recorded audio was sent for transcription.',
+        errorCode: 'missing_audio',
+      },
+      { status: 400 }
+    );
+  }
+
+  if (!(audioEntry instanceof Blob)) {
+    return NextResponse.json(
+      {
+        success: false,
+        error: 'The recorded audio payload was invalid for transcription.',
+        errorCode: 'invalid_audio_payload',
+      },
+      { status: 400 }
+    );
   }
 
   const mimeType =
@@ -68,22 +93,50 @@ export async function POST(request: NextRequest) {
       return NextResponse.json(
         {
           success: false,
-          error: 'Audio transcription failed before text was returned. You can type your transcript manually and continue.',
+          error: 'The transcription service rejected this audio for processing.',
+          errorCode: 'upstream_rejected_audio',
         },
-        { status: 500 }
+        { status: 502 }
       );
     }
 
-    const transcript = await whisperResponse.text();
-    return NextResponse.json({ success: true, transcript: transcript.trim() });
+    let transcript = '';
+    try {
+      transcript = await whisperResponse.text();
+    } catch (e) {
+      captureError(e, { context: 'api:transcribe', operation: 'read-upstream-response' });
+      return NextResponse.json(
+        {
+          success: false,
+          error: 'The transcription service returned an unreadable response.',
+          errorCode: 'upstream_parse_failed',
+        },
+        { status: 502 }
+      );
+    }
+
+    const cleanedTranscript = transcript.trim();
+    if (!cleanedTranscript) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: 'The transcription service returned no text from this recording.',
+          errorCode: 'empty_transcript',
+        },
+        { status: 200 }
+      );
+    }
+
+    return NextResponse.json({ success: true, transcript: cleanedTranscript });
   } catch (err) {
     captureError(err, { context: 'api:transcribe', operation: 'whisper-fetch' });
     return NextResponse.json(
       {
         success: false,
-        error: 'Could not reach the transcription service. You can type your transcript manually and continue.',
+        error: 'The transcription request could not reach the transcription service.',
+        errorCode: 'upstream_unreachable',
       },
-      { status: 500 }
+      { status: 502 }
     );
   }
 }

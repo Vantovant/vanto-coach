@@ -76,6 +76,28 @@ export async function getSignedAudioUrl(path: string): Promise<string | null> {
   return data.signedUrl;
 }
 
+
+/**
+ * Download an audio file blob from storage.
+ */
+export async function downloadAudio(path: string): Promise<Blob | null> {
+  const supabase = createClient();
+
+  const { data, error } = await supabase.storage
+    .from(BUCKET)
+    .download(path);
+
+  if (error || !data) {
+    captureMessage(`downloadAudio failed: ${error?.message ?? 'no data'}`, 'warning', {
+      context: 'storage:downloadAudio',
+      storagePath: path,
+    });
+    return null;
+  }
+
+  return data;
+}
+
 /**
  * Delete an audio file from storage.
  */

@@ -37,8 +37,8 @@ import fixWebmDuration from 'fix-webm-duration';
 import { toast } from 'sonner';
 import { trackBetaEvent } from '@/lib/supabase/analytics';
 import { captureError, captureMessage } from '@/lib/monitoring';
+import { uploadAudio, downloadAudio, getSignedAudioUrl } from '@/lib/supabase/storage';
 
-// Extended result type that includes transcript and AI processing
 export interface ExtendedRecordingResult extends RecordingResult {
   transcript: string;
   cleanedTranscript?: string;
@@ -56,6 +56,35 @@ interface VoiceRecorderProps {
   onCancel?: () => void;
 }
 
+type PersistedAudioRecovery = {
+  storagePath: string;
+  mimeType: string;
+  durationSeconds: number;
+  savedAt: number;
+};
+
+const RECOVERY_STORAGE_KEY = 'vanto-coach:pending-audio-recovery';
+
+function readRecoveryState(): PersistedAudioRecovery | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = window.localStorage.getItem(RECOVERY_STORAGE_KEY);
+    if (!raw) return null;
+    return JSON.parse(raw) as PersistedAudioRecovery;
+  } catch {
+    return null;
+  }
+}
+
+function writeRecoveryState(value: PersistedAudioRecovery | null) {
+  if (typeof window === 'undefined') return;
+  if (!value) {
+    window.localStorage.removeItem(RECOVERY_STORAGE_KEY);
+    return;
+  }
+  window.localStorage.setItem(RECOVERY_STORAGE_KEY, JSON.stringify(value));
+}
+
 export function VoiceRecorder({ onComplete, onCancel }: VoiceRecorderProps) {
   const {
     recordingStatus,
@@ -64,13 +93,11 @@ export function VoiceRecorder({ onComplete, onCancel }: VoiceRecorderProps) {
     audioUrl,
     audioBlob,
     error: recordingError,
-    supportedMimeType,
     startRecording,
     pauseRecording,
     resumeRecording,
     stopRecording,
     discardRecording,
-    requestPermission,
   } = useAudioRecorder();
 
   const {
@@ -99,7 +126,6 @@ export function VoiceRecorder({ onComplete, onCancel }: VoiceRecorderProps) {
     reset: resetProcessor,
   } = useTranscriptProcessor();
 
-  // Keep a ref to processingStatus so the handleSave polling closure always reads the live value
   const processingStatusRef = React.useRef<ProcessingStatus>(processingStatus);
   React.useEffect(() => { processingStatusRef.current = processingStatus; }, [processingStatus]);
 
@@ -108,19 +134,44 @@ export function VoiceRecorder({ onComplete, onCancel }: VoiceRecorderProps) {
   const [playbackProgress, setPlaybackProgress] = React.useState(0);
   const [isSaving, setIsSaving] = React.useState(false);
   const [showProcessedView, setShowProcessedView] = React.useState(false);
-
-  // Transcript editing state
   const [editedTranscript, setEditedTranscript] = React.useState('');
   const [isEditingTranscript, setIsEditingTranscript] = React.useState(false);
-
-  // ── Audio-blob transcription fallback ───────────────────────────────────────
-  // Fires when recording completes and uses the recorded audio as the
-  // authoritative transcription source. This same path is reused for
-  // user-triggered retry without forcing a re-record.
   const audioTranscribedRef = React.useRef(false);
   const [isAudioTranscribing, setIsAudioTranscribing] = React.useState(false);
   const [transcriptionStatus, setTranscriptionStatus] = React.useState<'idle' | 'transcribing' | 'failed' | 'succeeded'>('idle');
   const [transcriptionError, setTranscriptionError] = React.useState<string | null>(null);
+  const [persistedAudioPath, setPersistedAudioPath] = React.useState<string | null>(null);
+  const [persistedAudioMimeType, setPersistedAudioMimeType] = React.useState<string | null>(null);
+  const [isPersistingAudio, setIsPersistingAudio] = React.useState(false);
+
+  const persistAudioForRecovery = React.useCallback(async (blob: Blob, mimeType: string, duration: number) => {
+    if (persistedAudioPath || isPersistingAudio) {
+      return persistedAudioPath;
+    }
+
+    setIsPersistingAudio(true);
+    try {
+      const storagePath = await uploadAudio(blob, mimeType);
+      if (!storagePath) {
+        return null;
+      }
+
+      setPersistedAudioPath(storagePath);
+      setPersistedAudioMimeType(mimeType);
+      writeRecoveryState({
+        storagePath,
+        mimeType,
+        durationSeconds: duration,
+        savedAt: Date.now(),
+      });
+      return storagePath;
+    } catch (err) {
+      captureError(err, { context: 'diary:audioPersist' });
+      return null;
+    } finally {
+      setIsPersistingAudio(false);
+    }
+  }, [isPersistingAudio, persistedAudioPath]);
 
   const transcribeAudioBlob = React.useCallback(async (blob: Blob, options?: { isRetry?: boolean }) => {
     setIsAudioTranscribing(true);
@@ -128,7 +179,7 @@ export function VoiceRecorder({ onComplete, onCancel }: VoiceRecorderProps) {
     setTranscriptionError(null);
 
     try {
-      const mimeType = blob.type || 'audio/webm';
+      const mimeType = blob.type || persistedAudioMimeType || 'audio/webm';
       const form = new FormData();
       form.append('audio', blob);
       form.append('mimeType', mimeType);
@@ -170,6 +221,7 @@ export function VoiceRecorder({ onComplete, onCancel }: VoiceRecorderProps) {
         setTranscriptionError(null);
         setEditedTranscript(data.transcript);
         processTranscript(data.transcript);
+        writeRecoveryState(null);
         trackBetaEvent({
           eventName: 'diary_processed',
           route: '/coach',
@@ -198,33 +250,73 @@ export function VoiceRecorder({ onComplete, onCancel }: VoiceRecorderProps) {
     } finally {
       setIsAudioTranscribing(false);
     }
-  }, [processTranscript]);
+  }, [persistedAudioMimeType, processTranscript]);
 
-  const handleRetryTranscription = React.useCallback(() => {
-    if (!audioBlob || isAudioTranscribing) return;
+  const handleRetryTranscription = React.useCallback(async () => {
+    if (isAudioTranscribing) return;
+
+    if (audioBlob) {
+      audioTranscribedRef.current = true;
+      await transcribeAudioBlob(audioBlob, { isRetry: true });
+      return;
+    }
+
+    if (!persistedAudioPath) return;
+
+    const recoveredBlob = await downloadAudio(persistedAudioPath);
+    if (!recoveredBlob) {
+      setTranscriptionStatus('failed');
+      setTranscriptionError('Saved audio could not be recovered. You can type your transcript manually or re-record.');
+      toast.error('Recovery failed', {
+        description: 'Saved audio could not be recovered. You can type your transcript manually or re-record.',
+      });
+      return;
+    }
+
     audioTranscribedRef.current = true;
-    void transcribeAudioBlob(audioBlob, { isRetry: true });
-  }, [audioBlob, isAudioTranscribing, transcribeAudioBlob]);
+    await transcribeAudioBlob(recoveredBlob, { isRetry: true });
+  }, [audioBlob, isAudioTranscribing, persistedAudioPath, transcribeAudioBlob]);
 
-  // Reset the guard on each new recording so the effect can fire again
+  React.useEffect(() => {
+    const recovery = readRecoveryState();
+    if (!recovery) return;
+
+    setPersistedAudioPath(recovery.storagePath);
+    setPersistedAudioMimeType(recovery.mimeType);
+    setTranscriptionStatus('failed');
+    setTranscriptionError('Recovered your previous recording. Retry transcription or type your transcript manually.');
+
+    if (!audioUrl) {
+      void getSignedAudioUrl(recovery.storagePath).then((url) => {
+        if (url && audioRef.current) {
+          audioRef.current.src = url;
+        }
+      });
+    }
+  }, [audioUrl]);
+
   React.useEffect(() => {
     if (recordingStatus === 'recording') {
       audioTranscribedRef.current = false;
       setTranscriptionStatus('idle');
       setTranscriptionError(null);
+      setPersistedAudioPath(null);
+      setPersistedAudioMimeType(null);
+      writeRecoveryState(null);
     }
   }, [recordingStatus]);
 
   React.useEffect(() => {
-    if (
-      recordingStatus !== 'completed' ||
-      !audioBlob ||
-      audioTranscribedRef.current
-    ) return;
+    if (recordingStatus !== 'completed' || !audioBlob || audioTranscribedRef.current) return;
 
     audioTranscribedRef.current = true;
-    void transcribeAudioBlob(audioBlob);
-  }, [audioBlob, recordingStatus, transcribeAudioBlob]);
+    const mimeType = audioBlob.type || 'audio/webm';
+
+    void (async () => {
+      await persistAudioForRecovery(audioBlob, mimeType, durationSeconds);
+      await transcribeAudioBlob(audioBlob);
+    })();
+  }, [audioBlob, durationSeconds, persistAudioForRecovery, recordingStatus, transcribeAudioBlob]);
 
   React.useEffect(() => {
     const audio = audioRef.current;
@@ -299,7 +391,17 @@ export function VoiceRecorder({ onComplete, onCancel }: VoiceRecorderProps) {
   };
 
   const handleSave = async () => {
-    if (!audioBlob || !audioUrl) return;
+    let blobForSave = audioBlob;
+    let urlForSave = audioUrl;
+
+    if ((!blobForSave || !urlForSave) && persistedAudioPath) {
+      const recoveredBlob = await downloadAudio(persistedAudioPath);
+      const recoveredUrl = await getSignedAudioUrl(persistedAudioPath);
+      if (recoveredBlob) blobForSave = recoveredBlob;
+      if (recoveredUrl) urlForSave = recoveredUrl;
+    }
+
+    if (!blobForSave || !urlForSave) return;
 
     setIsSaving(true);
 
@@ -314,11 +416,11 @@ export function VoiceRecorder({ onComplete, onCancel }: VoiceRecorderProps) {
       });
     }
 
-    let finalBlob: Blob = audioBlob;
-    let finalUrl: string = audioUrl;
-    if (audioBlob.type.includes('webm') && durationSeconds > 0) {
+    let finalBlob: Blob = blobForSave;
+    let finalUrl: string = urlForSave;
+    if (blobForSave.type.includes('webm') && durationSeconds > 0) {
       try {
-        const fixed: Blob = await fixWebmDuration(audioBlob, durationSeconds * 1000, { logger: false });
+        const fixed: Blob = await fixWebmDuration(blobForSave, durationSeconds * 1000, { logger: false });
         const fixedUrl = URL.createObjectURL(fixed);
         finalBlob = fixed;
         finalUrl = fixedUrl;
@@ -327,13 +429,12 @@ export function VoiceRecorder({ onComplete, onCancel }: VoiceRecorderProps) {
     }
 
     await new Promise(resolve => setTimeout(resolve, 300));
-
     setIsSaving(false);
 
     try {
       onComplete({
         audioBlob: finalBlob,
-        audioUrl: finalUrl,
+        audioUrl: persistedAudioPath || finalUrl,
         duration: durationSeconds,
         mimeType: finalBlob.type,
         transcript: editedTranscript,
@@ -344,6 +445,7 @@ export function VoiceRecorder({ onComplete, onCancel }: VoiceRecorderProps) {
         actionItems: processedResult?.actionItems,
         prayerPoints: processedResult?.prayerPoints,
       });
+      writeRecoveryState(null);
     } catch (err) {
       captureError(err, { context: 'diary:save' });
       toast.error('Failed to save entry', {
@@ -363,6 +465,9 @@ export function VoiceRecorder({ onComplete, onCancel }: VoiceRecorderProps) {
     setEditedTranscript('');
     setTranscriptionStatus('idle');
     setTranscriptionError(null);
+    setPersistedAudioPath(null);
+    setPersistedAudioMimeType(null);
+    writeRecoveryState(null);
     setIsEditingTranscript(false);
     setShowProcessedView(false);
     discardRecording();
@@ -387,6 +492,8 @@ export function VoiceRecorder({ onComplete, onCancel }: VoiceRecorderProps) {
     };
     return moodEmojis[mood] || '📝';
   };
+
+  const status = recordingStatus;
 
   const getWaveformBars = () => {
     if (status !== 'recording' && status !== 'paused') return [];
@@ -421,8 +528,6 @@ export function VoiceRecorder({ onComplete, onCancel }: VoiceRecorderProps) {
 
   const transcriptStatus = getTranscriptStatus();
   const combinedError = recordingError || speechError;
-  const status = recordingStatus;
-
   const liveTranscript = interimText;
   const transcriptBadgeLabel = editedTranscript
     ? 'Captured'
@@ -434,8 +539,8 @@ export function VoiceRecorder({ onComplete, onCancel }: VoiceRecorderProps) {
 
   return (
     <div className="space-y-6">
-      {audioUrl && (
-        <audio ref={audioRef} src={audioUrl} preload="metadata" />
+      {(audioUrl || persistedAudioPath) && (
+        <audio ref={audioRef} src={audioUrl ?? undefined} preload="metadata" />
       )}
 
       {combinedError && (
@@ -545,7 +650,7 @@ export function VoiceRecorder({ onComplete, onCancel }: VoiceRecorderProps) {
           </>
         )}
 
-        {status === 'completed' && audioUrl && (
+        {status === 'completed' && (audioUrl || persistedAudioPath) && (
           <>
             <div className="h-20 w-20 rounded-full bg-success/10 flex items-center justify-center mb-4">
               <CheckCircle2 className="h-10 w-10 text-success" />
@@ -600,7 +705,6 @@ export function VoiceRecorder({ onComplete, onCancel }: VoiceRecorderProps) {
                       className="h-7 w-7 p-0"
                       onClick={() => {
                         setIsEditingTranscript(false);
-                        setIsEditingTranscript(false);
                       }}
                     >
                       <X className="h-3 w-3" />
@@ -637,8 +741,8 @@ export function VoiceRecorder({ onComplete, onCancel }: VoiceRecorderProps) {
                     variant="ghost"
                     size="sm"
                     className="shrink-0 text-xs gap-1"
-                    onClick={handleRetryTranscription}
-                    disabled={!audioBlob || isAudioTranscribing}
+                    onClick={() => void handleRetryTranscription()}
+                    disabled={(!audioBlob && !persistedAudioPath) || isAudioTranscribing}
                   >
                     <RefreshCw className={cn('h-3 w-3', isAudioTranscribing && 'animate-spin')} />
                     Retry transcription

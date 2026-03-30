@@ -66,13 +66,16 @@ export async function POST(request: NextRequest) {
     );
   }
 
+  const requestedFilename = formData.get('filename');
   const mimeType =
     (formData.get('mimeType') as string | null) ||
     audioEntry.type ||
     'audio/webm';
 
   const ext = getExtFromMime(mimeType);
-  const filename = `recording.${ext}`;
+  const filename = typeof requestedFilename === 'string' && requestedFilename.trim().length > 0
+    ? requestedFilename.trim()
+    : `recording.${ext}`;
   const audioFile = new File([audioEntry], filename, { type: mimeType });
 
   const whisperForm = new FormData();
@@ -98,6 +101,7 @@ export async function POST(request: NextRequest) {
         submittedMimeType: mimeType,
         filename,
         extension: ext,
+        fileSize: audioEntry.size,
       });
       return NextResponse.json(
         {
@@ -110,6 +114,7 @@ export async function POST(request: NextRequest) {
             submittedMimeType: mimeType,
             filename,
             extension: ext,
+            fileSize: audioEntry.size,
           },
         },
         { status: 502 }

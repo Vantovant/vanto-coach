@@ -87,7 +87,7 @@ type TranscriptionDebugDetails = {
   submittedMimeType?: string;
   filename?: string;
   fileSize?: number;
-  normalizationOutcome?: 'produced_wav' | 'fell_back';
+  normalizationOutcome?: 'produced_wav' | 'fell_back' | 'produced_client_wav';
 };
 
 
@@ -147,6 +147,76 @@ async function normalizeToWav(blob: Blob): Promise<Blob> {
   }
   
   return new Blob([buffer], { type: 'audio/wav' });
+}
+
+
+function shouldNormalizeToWav(mimeType: string): boolean {
+  const normalizedMimeType = mimeType.toLowerCase();
+  return normalizedMimeType.includes('webm') || normalizedMimeType.includes('opus');
+}
+
+function encodeWavBuffer(audioBuffer: AudioBuffer): ArrayBuffer {
+  const channelCount = audioBuffer.numberOfChannels;
+  const sampleRate = audioBuffer.sampleRate;
+  const frameCount = audioBuffer.length;
+  const bytesPerSample = 2;
+  const blockAlign = channelCount * bytesPerSample;
+  const dataSize = frameCount * blockAlign;
+  const buffer = new ArrayBuffer(44 + dataSize);
+  const view = new DataView(buffer);
+
+  const writeString = (offset: number, value: string) => {
+    for (let index = 0; index < value.length; index += 1) {
+      view.setUint8(offset + index, value.charCodeAt(index));
+    }
+  };
+
+  writeString(0, 'RIFF');
+  view.setUint32(4, 36 + dataSize, true);
+  writeString(8, 'WAVE');
+  writeString(12, 'fmt ');
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, channelCount, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * blockAlign, true);
+  view.setUint16(32, blockAlign, true);
+  view.setUint16(34, 16, true);
+  writeString(36, 'data');
+  view.setUint32(40, dataSize, true);
+
+  const channels = Array.from({ length: channelCount }, (_, index) => audioBuffer.getChannelData(index));
+  let offset = 44;
+
+  for (let frameIndex = 0; frameIndex < frameCount; frameIndex += 1) {
+    for (let channelIndex = 0; channelIndex < channelCount; channelIndex += 1) {
+      const sample = Math.max(-1, Math.min(1, channels[channelIndex][frameIndex] ?? 0));
+      const pcm = sample < 0 ? sample * 0x8000 : sample * 0x7fff;
+      view.setInt16(offset, pcm, true);
+      offset += bytesPerSample;
+    }
+  }
+
+  return buffer;
+}
+
+async function normalizeAudioBlobToWav(blob: Blob): Promise<Blob> {
+  const arrayBuffer = await blob.arrayBuffer();
+  const audioContext = new AudioContext();
+
+  try {
+    const decoded = await audioContext.decodeAudioData(arrayBuffer.slice(0));
+    const offlineContext = new OfflineAudioContext(decoded.numberOfChannels, decoded.length, decoded.sampleRate);
+    const source = offlineContext.createBufferSource();
+    source.buffer = decoded;
+    source.connect(offlineContext.destination);
+    source.start(0);
+    const rendered = await offlineContext.startRendering();
+    const wavBuffer = encodeWavBuffer(rendered);
+    return new Blob([wavBuffer], { type: 'audio/wav' });
+  } finally {
+    await audioContext.close();
+  }
 }
 
 function readRecoveryState(): PersistedAudioRecovery | null {
@@ -435,15 +505,29 @@ export function VoiceRecorder({ onComplete, onCancel }: VoiceRecorderProps) {
 
     let finalBlob: Blob = blobForSave;
     let finalUrl: string = urlForSave;
-    const normalizedMimeType = blobForSave.type || persistedAudioMimeType || 'audio/webm';
-    const shouldNormalizeWebmDuration = normalizedMimeType.includes('webm') && durationSeconds > 0 && !(typeof navigator !== 'undefined' && /edg/i.test(navigator.userAgent));
+    let finalMimeType = blobForSave.type || persistedAudioMimeType || 'audio/webm';
+    const isEdgeBrowser = typeof navigator !== 'undefined' && /edg/i.test(navigator.userAgent);
+    const requiresWavNormalization = shouldNormalizeToWav(finalMimeType);
+    const shouldNormalizeWebmDuration = finalMimeType.includes('webm') && durationSeconds > 0 && !isEdgeBrowser && !requiresWavNormalization;
 
-    if (shouldNormalizeWebmDuration) {
+    if (requiresWavNormalization) {
+      try {
+        const normalizedWavBlob = await normalizeAudioBlobToWav(blobForSave);
+        if (normalizedWavBlob.size > 0) {
+          finalBlob = normalizedWavBlob;
+          finalMimeType = normalizedWavBlob.type || 'audio/wav';
+          finalUrl = URL.createObjectURL(normalizedWavBlob);
+        }
+      } catch (err) {
+        captureError(err, { context: 'diary:normalizeToWav' });
+      }
+    } else if (shouldNormalizeWebmDuration) {
       try {
         const fixed: Blob = await fixWebmDuration(blobForSave, durationSeconds * 1000, { logger: false });
         if (fixed.size > 0) {
           const fixedUrl = URL.createObjectURL(fixed);
           finalBlob = fixed;
+          finalMimeType = fixed.type || finalMimeType;
           finalUrl = fixedUrl;
         }
       } catch {
@@ -461,9 +545,14 @@ export function VoiceRecorder({ onComplete, onCancel }: VoiceRecorderProps) {
       return;
     }
 
+<<<<<<< HEAD
     const finalMimeType = finalBlob.type || normalizedMimeType;
     const safeWavBlob = await normalizeToWav(finalBlob);
 const finalFile = new File([safeWavBlob], 'recording.wav', { type: 'audio/wav' });
+=======
+    finalMimeType = finalBlob.type || finalMimeType;
+    const finalFile = ensureNamedAudioFile(finalBlob, finalMimeType);
+>>>>>>> 8ed6959eaa5cf52f10df436c7ee424e153f4af4b
 
     await new Promise(resolve => setTimeout(resolve, 300));
     setIsSaving(false);

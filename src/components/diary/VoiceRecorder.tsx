@@ -40,6 +40,7 @@ import { captureError, captureMessage } from '@/lib/monitoring';
 import { uploadAudio, downloadAudio, getSignedAudioUrl } from '@/lib/supabase/storage';
 
 export interface ExtendedRecordingResult extends RecordingResult {
+  audioFile?: File;
   transcript: string;
   cleanedTranscript?: string;
   summary?: string;
@@ -88,6 +89,25 @@ type TranscriptionDebugDetails = {
   fileSize?: number;
   normalizationOutcome?: 'produced_wav' | 'fell_back';
 };
+
+
+function getExtensionFromMimeType(mimeType: string): string {
+  const normalizedType = mimeType.toLowerCase();
+
+  if (normalizedType.includes('webm')) return 'webm';
+  if (normalizedType.includes('mp4') || normalizedType.includes('m4a')) return 'mp4';
+  if (normalizedType.includes('mpeg') || normalizedType.includes('mp3')) return 'mp3';
+  if (normalizedType.includes('ogg')) return 'ogg';
+  if (normalizedType.includes('wav')) return 'wav';
+
+  return 'webm';
+}
+
+function ensureNamedAudioFile(blob: Blob, mimeType: string): File {
+  const normalizedMimeType = mimeType || blob.type || 'audio/webm';
+  const extension = getExtensionFromMimeType(normalizedMimeType);
+  return new File([blob], `recording.${extension}`, { type: normalizedMimeType });
+}
 
 function readRecoveryState(): PersistedAudioRecovery | null {
   if (typeof window === 'undefined') return null;
@@ -166,6 +186,7 @@ export function VoiceRecorder({ onComplete, onCancel }: VoiceRecorderProps) {
   const [persistedAudioPath, setPersistedAudioPath] = React.useState<string | null>(null);
   const [persistedAudioMimeType, setPersistedAudioMimeType] = React.useState<string | null>(null);
   const [isPersistingAudio, setIsPersistingAudio] = React.useState(false);
+  const [audioValidationError, setAudioValidationError] = React.useState<string | null>(null);
 
   const persistAudioForRecovery = React.useCallback(async (blob: Blob, mimeType: string, duration: number) => {
     if (persistedAudioPath || isPersistingAudio) {
@@ -220,6 +241,7 @@ export function VoiceRecorder({ onComplete, onCancel }: VoiceRecorderProps) {
       setTranscriptionError(null);
       setPersistedAudioPath(null);
       setPersistedAudioMimeType(null);
+      setAudioValidationError(null);
       writeRecoveryState(null);
     }
   }, [isSpeechSupported, recordingStatus]);
@@ -311,6 +333,7 @@ export function VoiceRecorder({ onComplete, onCancel }: VoiceRecorderProps) {
     setEditedTranscript('');
     setTranscriptionStatus(isSpeechSupported ? 'capturing' : 'idle');
     setTranscriptionError(null);
+    setAudioValidationError(null);
     setIsEditingTranscript(false);
     setShowProcessedView(false);
     await startRecording();
@@ -347,6 +370,16 @@ export function VoiceRecorder({ onComplete, onCancel }: VoiceRecorderProps) {
 
     if (!blobForSave || !urlForSave) return;
 
+    if (blobForSave.size === 0) {
+      const message = 'Recorded audio is empty. Please record again before uploading.';
+      setAudioValidationError(message);
+      setTranscriptionError(message);
+      toast.error('Recording unavailable', {
+        description: message,
+      });
+      return;
+    }
+
     setIsSaving(true);
 
     if (processingStatus === 'processing') {
@@ -362,15 +395,34 @@ export function VoiceRecorder({ onComplete, onCancel }: VoiceRecorderProps) {
 
     let finalBlob: Blob = blobForSave;
     let finalUrl: string = urlForSave;
-    if (blobForSave.type.includes('webm') && durationSeconds > 0) {
+    const normalizedMimeType = blobForSave.type || persistedAudioMimeType || 'audio/webm';
+    const shouldNormalizeWebmDuration = normalizedMimeType.includes('webm') && durationSeconds > 0 && !(typeof navigator !== 'undefined' && /edg/i.test(navigator.userAgent));
+
+    if (shouldNormalizeWebmDuration) {
       try {
         const fixed: Blob = await fixWebmDuration(blobForSave, durationSeconds * 1000, { logger: false });
-        const fixedUrl = URL.createObjectURL(fixed);
-        finalBlob = fixed;
-        finalUrl = fixedUrl;
+        if (fixed.size > 0) {
+          const fixedUrl = URL.createObjectURL(fixed);
+          finalBlob = fixed;
+          finalUrl = fixedUrl;
+        }
       } catch {
       }
     }
+
+    if (finalBlob.size === 0) {
+      const message = 'Recorded audio payload is invalid. Please record again before transcription.';
+      setAudioValidationError(message);
+      setTranscriptionError(message);
+      setIsSaving(false);
+      toast.error('Recording unavailable', {
+        description: message,
+      });
+      return;
+    }
+
+    const finalMimeType = finalBlob.type || normalizedMimeType;
+    const finalFile = ensureNamedAudioFile(finalBlob, finalMimeType);
 
     await new Promise(resolve => setTimeout(resolve, 300));
     setIsSaving(false);
@@ -378,9 +430,10 @@ export function VoiceRecorder({ onComplete, onCancel }: VoiceRecorderProps) {
     try {
       onComplete({
         audioBlob: finalBlob,
+        audioFile: finalFile,
         audioUrl: persistedAudioPath || finalUrl,
         duration: durationSeconds,
-        mimeType: finalBlob.type,
+        mimeType: finalFile.type,
         transcript: editedTranscript,
         cleanedTranscript: processedResult?.cleanedTranscript,
         summary: processedResult?.summary,
@@ -411,6 +464,7 @@ export function VoiceRecorder({ onComplete, onCancel }: VoiceRecorderProps) {
     setTranscriptionError(null);
     setPersistedAudioPath(null);
     setPersistedAudioMimeType(null);
+    setAudioValidationError(null);
     writeRecoveryState(null);
     setIsEditingTranscript(false);
     setShowProcessedView(false);
@@ -471,7 +525,7 @@ export function VoiceRecorder({ onComplete, onCancel }: VoiceRecorderProps) {
   };
 
   const transcriptStatus = getTranscriptStatus();
-  const combinedError = recordingError || speechError;
+  const combinedError = audioValidationError || recordingError || speechError;
   const liveTranscript = interimText;
   const transcriptBadgeLabel = editedTranscript
     ? 'Captured'

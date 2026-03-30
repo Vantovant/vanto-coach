@@ -36,12 +36,20 @@ export interface UseAudioRecorderReturn {
   requestPermission: () => Promise<boolean>;
 }
 
-const MIME_TYPE_CANDIDATES = [
+const EDGE_MIME_TYPE_CANDIDATES = [
+  'audio/mp4',
   'audio/webm;codecs=opus',
   'audio/webm',
+  'audio/mpeg',
   'audio/ogg;codecs=opus',
+] as const;
+
+const DEFAULT_MIME_TYPE_CANDIDATES = [
+  'audio/webm;codecs=opus',
+  'audio/webm',
   'audio/mp4',
   'audio/mpeg',
+  'audio/ogg;codecs=opus',
 ] as const;
 
 function getSupportedMimeType(): string | null {
@@ -49,7 +57,10 @@ function getSupportedMimeType(): string | null {
     return null;
   }
 
-  for (const type of MIME_TYPE_CANDIDATES) {
+  const userAgent = typeof navigator !== 'undefined' ? navigator.userAgent : '';
+  const mimeTypeCandidates = /edg/i.test(userAgent) ? EDGE_MIME_TYPE_CANDIDATES : DEFAULT_MIME_TYPE_CANDIDATES;
+
+  for (const type of mimeTypeCandidates) {
     if (MediaRecorder.isTypeSupported(type)) {
       return type;
     }
@@ -76,6 +87,9 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
   const timerIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const startTimeRef = useRef<number>(0);
   const pausedDurationRef = useRef<number>(0);
+  const recordingStatusRef = useRef<RecordingStatus>('idle');
+  const durationSecondsRef = useRef<number>(0);
+  const supportedMimeTypeRef = useRef<string | null>(null);
 
   const cleanup = useCallback(() => {
     if (animationFrameRef.current) {
@@ -99,8 +113,22 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
   }, []);
 
   useEffect(() => {
-    setSupportedMimeType(getSupportedMimeType());
+    const mimeType = getSupportedMimeType();
+    setSupportedMimeType(mimeType);
+    supportedMimeTypeRef.current = mimeType;
   }, []);
+
+  useEffect(() => {
+    recordingStatusRef.current = recordingStatus;
+  }, [recordingStatus]);
+
+  useEffect(() => {
+    durationSecondsRef.current = durationSeconds;
+  }, [durationSeconds]);
+
+  useEffect(() => {
+    supportedMimeTypeRef.current = supportedMimeType;
+  }, [supportedMimeType]);
 
   useEffect(() => {
     return () => {
@@ -229,7 +257,7 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
         cleanup();
       };
 
-      mediaRecorder.start(1000);
+      mediaRecorder.start(250);
       setRecordingStatus('recording');
       setDurationSeconds(0);
       startTimer();
@@ -252,7 +280,7 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
   }, [audioUrl, cleanup, startTimer, updateAudioLevel]);
 
   const pauseRecording = useCallback((): void => {
-    if (mediaRecorderRef.current && recordingStatus === 'recording') {
+    if (mediaRecorderRef.current && recordingStatusRef.current === 'recording') {
       mediaRecorderRef.current.pause();
       setRecordingStatus('paused');
       stopTimer();
@@ -263,19 +291,19 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
         animationFrameRef.current = null;
       }
     }
-  }, [recordingStatus, stopTimer]);
+  }, [stopTimer]);
 
   const resumeRecording = useCallback((): void => {
-    if (mediaRecorderRef.current && recordingStatus === 'paused') {
+    if (mediaRecorderRef.current && recordingStatusRef.current === 'paused') {
       mediaRecorderRef.current.resume();
       setRecordingStatus('recording');
       startTimer();
       updateAudioLevel();
     }
-  }, [recordingStatus, startTimer, updateAudioLevel]);
+  }, [startTimer, updateAudioLevel]);
 
   const stopRecording = useCallback(async (): Promise<RecordingResult | null> => {
-    if (!mediaRecorderRef.current || (recordingStatus !== 'recording' && recordingStatus !== 'paused')) {
+    if (!mediaRecorderRef.current || (recordingStatusRef.current !== 'recording' && recordingStatusRef.current !== 'paused')) {
       return null;
     }
 
@@ -292,7 +320,7 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
       const mediaRecorder = mediaRecorderRef.current!;
 
       mediaRecorder.onstop = () => {
-        const mimeType = mediaRecorder.mimeType || supportedMimeType || 'audio/webm';
+        const mimeType = mediaRecorder.mimeType || supportedMimeTypeRef.current || 'audio/webm';
         const blob = new Blob(audioChunksRef.current, { type: mimeType });
         const url = URL.createObjectURL(blob);
 
@@ -314,14 +342,19 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
         resolve({
           audioBlob: blob,
           audioUrl: url,
-          duration: durationSeconds,
+          duration: durationSecondsRef.current,
           mimeType,
         });
       };
 
+      try {
+        mediaRecorder.requestData();
+      } catch {
+      }
+
       mediaRecorder.stop();
     });
-  }, [durationSeconds, recordingStatus, stopTimer, supportedMimeType]);
+  }, [stopTimer]);
 
   const discardRecording = useCallback((): void => {
     cleanup();

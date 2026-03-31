@@ -176,6 +176,10 @@ export function DiaryTab() {
           toast.success('Entry saved', {
             description: hasProcessedData ? 'AI insights extracted.' : 'Recording preserved.',
           });
+        } else {
+          toast.error('Failed to save entry', {
+            description: 'Your recording was not persisted. Please try again.',
+          });
         }
       } catch (saveErr) {
         captureError(saveErr, { context: 'diary:save' });
@@ -190,31 +194,12 @@ export function DiaryTab() {
       }
 
       // 6. Optimistic local update (use saved row or build a local placeholder)
-      const sessionToShow: CoachSession = saved ?? {
-        id: `session-local-${Date.now()}`,
-        user_id: '',
-        title: `Voice Entry - ${format(new Date(), 'MMMM d, h:mm a')}`,
-        session_date: format(new Date(), 'yyyy-MM-dd'),
-        audio_url: storedAudioUrl,
-        audio_duration_seconds: result.duration,
-        raw_transcript: hasTranscript ? result.transcript : null,
-        cleaned_transcript: result.cleanedTranscript || (hasTranscript ? result.transcript : null),
-        summary: summaryText,
-        mood: (result.mood as SessionMood) || null,
-        sentiment_score: result.mood ? getMoodSentiment(result.mood) : null,
-        life_areas: lifeAreas,
-        spiritual_topics: result.prayerPoints?.length ? ['prayer'] : [],
-        coach_response: hasProcessedData ? 'AI analysis complete. Review your insights below.' : null,
-        biblical_response: null,
-        action_status: result.actionItems?.length ? 'extracted' : (hasTranscript ? 'pending' : 'none'),
-        structured_entry: structuredEntry,
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-        deleted_at: null,
-      };
+      if (!saved) {
+        return;
+      }
 
-      prependSession(sessionToShow);
-      setSelectedSession(sessionToShow);
+      prependSession(saved);
+      setSelectedSession(saved);
     }
     setShowRecorder(false);
   }, [prependSession]);

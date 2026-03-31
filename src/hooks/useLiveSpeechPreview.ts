@@ -108,6 +108,11 @@ function appendUniqueTranscript(existing: string, incoming: string): string {
   return `${existing.trim()} ${normalizedIncoming}`.trim();
 }
 
+function isAndroidDevice(): boolean {
+  if (typeof navigator === 'undefined') return false;
+  return /android/i.test(navigator.userAgent);
+}
+
 export function useLiveSpeechPreview(
   options: LiveSpeechPreviewOptions = {}
 ): UseLiveSpeechPreviewReturn {
@@ -128,12 +133,23 @@ export function useLiveSpeechPreview(
   const isPausedRef = useRef(false);
   const shouldRestartRef = useRef(false);
   const initRecognitionRef = useRef<(() => SpeechRecognition | null) | null>(null);
-  const lastFinalSegmentRef = useRef('');
   const committedTextRef = useRef('');
+  const interimTextRef = useRef('');
   const restartTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const isAndroidRef = useRef(false);
 
   useEffect(() => {
+    const android = isAndroidDevice();
+    isAndroidRef.current = android;
+
     const speechApi = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (android) {
+      setSupported(false);
+      setPreviewStatus('unsupported');
+      setError('Live transcription is not supported on this Android device. Record first, then save or type your transcript manually.');
+      return;
+    }
+
     if (!speechApi) {
       setSupported(false);
       setPreviewStatus('unsupported');
@@ -141,9 +157,16 @@ export function useLiveSpeechPreview(
     }
   }, []);
 
+  const clearRestartTimeout = useCallback(() => {
+    if (restartTimeoutRef.current) {
+      clearTimeout(restartTimeoutRef.current);
+      restartTimeoutRef.current = null;
+    }
+  }, []);
+
   const initRecognition = useCallback(() => {
     const speechApi = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!speechApi) {
+    if (!speechApi || isAndroidRef.current) {
       return null;
     }
 
@@ -164,32 +187,29 @@ export function useLiveSpeechPreview(
 
       for (let index = event.resultIndex; index < event.results.length; index += 1) {
         const result = event.results[index];
-        const text = normalizeSpeechSegment(result[0].transcript);
-        if (!text) continue;
+        const transcript = normalizeSpeechSegment(result[0].transcript);
+        if (!transcript) continue;
 
         if (result.isFinal) {
-          if (text === lastFinalSegmentRef.current) {
-            continue;
-          }
-
-          lastFinalSegmentRef.current = text;
-          nextCommitted = appendUniqueTranscript(nextCommitted, text);
-          continue;
+          nextCommitted = appendUniqueTranscript(nextCommitted, transcript);
+        } else {
+          nextInterim = transcript;
         }
-
-        nextInterim = appendUniqueTranscript(nextCommitted, text);
       }
 
       committedTextRef.current = nextCommitted;
+      interimTextRef.current = nextInterim;
       setCommittedText(nextCommitted);
-      setInterimText(nextInterim);
+      setInterimText(nextInterim ? appendUniqueTranscript(nextCommitted, nextInterim) : '');
+      console.log('[onresult]', {
+        interim: nextInterim,
+        final: nextCommitted,
+        committed: committedTextRef.current,
+      });
     };
 
     recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
-      if (restartTimeoutRef.current) {
-        clearTimeout(restartTimeoutRef.current);
-        restartTimeoutRef.current = null;
-      }
+      clearRestartTimeout();
 
       switch (event.error) {
         case 'no-speech':
@@ -214,50 +234,50 @@ export function useLiveSpeechPreview(
     };
 
     recognition.onend = () => {
-      if (restartTimeoutRef.current) {
-        clearTimeout(restartTimeoutRef.current);
-        restartTimeoutRef.current = null;
-      }
+      clearRestartTimeout();
 
       if (shouldRestartRef.current && !isPausedRef.current) {
         restartTimeoutRef.current = setTimeout(() => {
-          if (!shouldRestartRef.current || isPausedRef.current) return;
+          if (!shouldRestartRef.current || isPausedRef.current || isAndroidRef.current) return;
           const nextRecognition = initRecognitionRef.current?.();
           if (nextRecognition) {
             recognitionRef.current = nextRecognition;
             try {
               nextRecognition.start();
+              console.log('[onend] restart scheduled');
             } catch {
+              setPreviewStatus('stopped');
             }
           }
-        }, 600);
+        }, 10_000);
       } else if (!isPausedRef.current) {
         setPreviewStatus('stopped');
       }
     };
 
     return recognition;
-  }, [continuous, interimResults, language, maxAlternatives]);
+  }, [clearRestartTimeout, continuous, interimResults, language, maxAlternatives]);
 
   useEffect(() => {
     initRecognitionRef.current = initRecognition;
   }, [initRecognition]);
+
   useEffect(() => {
     committedTextRef.current = committedText;
   }, [committedText]);
 
-
   const startPreview = useCallback(() => {
-    if (!supported) {
-      setError('Speech recognition is not supported in this browser.');
+    if (!supported || isAndroidRef.current) {
+      setError('Live transcription is not supported on this device. After recording, tap Save to process your speech.');
       return;
     }
 
+    clearRestartTimeout();
     setError(null);
     setInterimText('');
     setCommittedText('');
     committedTextRef.current = '';
-    lastFinalSegmentRef.current = '';
+    interimTextRef.current = '';
     isPausedRef.current = false;
     shouldRestartRef.current = true;
     recognitionRef.current = initRecognition();
@@ -270,16 +290,12 @@ export function useLiveSpeechPreview(
         setPreviewStatus('failed');
       }
     }
-  }, [initRecognition, supported]);
+  }, [clearRestartTimeout, initRecognition, supported]);
 
   const stopPreview = useCallback(() => {
     shouldRestartRef.current = false;
     isPausedRef.current = false;
-
-    if (restartTimeoutRef.current) {
-      clearTimeout(restartTimeoutRef.current);
-      restartTimeoutRef.current = null;
-    }
+    clearRestartTimeout();
 
     if (recognitionRef.current) {
       try {
@@ -290,16 +306,12 @@ export function useLiveSpeechPreview(
 
     setPreviewStatus('stopped');
     setInterimText('');
-  }, []);
+  }, [clearRestartTimeout]);
 
   const pausePreview = useCallback(() => {
     isPausedRef.current = true;
     shouldRestartRef.current = false;
-
-    if (restartTimeoutRef.current) {
-      clearTimeout(restartTimeoutRef.current);
-      restartTimeoutRef.current = null;
-    }
+    clearRestartTimeout();
 
     if (recognitionRef.current) {
       try {
@@ -310,11 +322,12 @@ export function useLiveSpeechPreview(
 
     setPreviewStatus('paused');
     setInterimText('');
-  }, []);
+  }, [clearRestartTimeout]);
 
   const resumePreview = useCallback(() => {
-    if (!supported) return;
+    if (!supported || isAndroidRef.current) return;
 
+    clearRestartTimeout();
     isPausedRef.current = false;
     shouldRestartRef.current = true;
     recognitionRef.current = initRecognition();
@@ -327,29 +340,22 @@ export function useLiveSpeechPreview(
         setPreviewStatus('failed');
       }
     }
-  }, [initRecognition, supported]);
+  }, [clearRestartTimeout, initRecognition, supported]);
 
   const resetPreview = useCallback(() => {
-    if (restartTimeoutRef.current) {
-      clearTimeout(restartTimeoutRef.current);
-      restartTimeoutRef.current = null;
-    }
-
+    clearRestartTimeout();
     setInterimText('');
     setCommittedText('');
     committedTextRef.current = '';
-    lastFinalSegmentRef.current = '';
+    interimTextRef.current = '';
     setError(null);
     setPreviewStatus(supported ? 'idle' : 'unsupported');
-  }, [supported]);
+  }, [clearRestartTimeout, supported]);
 
   useEffect(() => {
     return () => {
       shouldRestartRef.current = false;
-      if (restartTimeoutRef.current) {
-        clearTimeout(restartTimeoutRef.current);
-        restartTimeoutRef.current = null;
-      }
+      clearRestartTimeout();
       if (recognitionRef.current) {
         try {
           recognitionRef.current.stop();
@@ -357,7 +363,7 @@ export function useLiveSpeechPreview(
         }
       }
     };
-  }, []);
+  }, [clearRestartTimeout]);
 
   return {
     supported,

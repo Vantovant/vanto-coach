@@ -90,78 +90,29 @@ type TranscriptionDebugDetails = {
   normalizationOutcome?: 'produced_wav' | 'fell_back' | 'produced_client_wav';
 };
 
-
-// --- REPLACE ensureNamedAudioFile AND getExtensionFromMimeType WITH THIS ---
-
-async function normalizeToWav(blob: Blob): Promise<Blob> {
-  try {
-    const arrayBuffer = await blob.arrayBuffer();
-    const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
-    const audioContext = new AudioContextClass();
-
-    if (audioContext.state === 'suspended') {
-      await audioContext.resume();
-    }
-
-    const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
-
-    const numOfChan = audioBuffer.numberOfChannels;
-    const length = audioBuffer.length * numOfChan * 2 + 44;
-    const buffer = new ArrayBuffer(length);
-    const view = new DataView(buffer);
-    const channels: Float32Array[] = [];
-    let sample = 0;
-    let offset = 0;
-    let pos = 0;
-
-    const setUint16 = (data: number) => { view.setUint16(pos, data, true); pos += 2; };
-    const setUint32 = (data: number) => { view.setUint32(pos, data, true); pos += 4; };
-    const setString = (data: string) => {
-      for (let i = 0; i < data.length; i++) {
-        view.setUint8(pos, data.charCodeAt(i));
-        pos++;
-      }
-    };
-
-    setString('RIFF');
-    setUint32(length - 8);
-    setString('WAVE');
-    setString('fmt ');
-    setUint32(16);
-    setUint16(1);
-    setUint16(numOfChan);
-    setUint32(audioBuffer.sampleRate);
-    setUint32(audioBuffer.sampleRate * 2 * numOfChan);
-    setUint16(numOfChan * 2);
-    setUint16(16);
-    setString('data');
-    setUint32(length - pos - 4);
-
-    for (let i = 0; i < audioBuffer.numberOfChannels; i++) {
-      channels.push(audioBuffer.getChannelData(i));
-    }
-
-    while (pos < length) {
-      for (let i = 0; i < numOfChan; i++) {
-        sample = Math.max(-1, Math.min(1, channels[i][offset]));
-        sample = (0.5 + sample < 0 ? sample * 32768 : sample * 32767) | 0;
-        view.setInt16(pos, sample, true);
-        pos += 2;
-      }
-      offset++;
-    }
-
-    return new Blob([buffer], { type: 'audio/wav' });
-  } catch (error) {
-    console.error('Mobile Audio Normalization failed:', error);
-    return blob;
-  }
-}
-
-
 function shouldNormalizeToWav(mimeType: string): boolean {
   const normalizedMimeType = mimeType.toLowerCase();
-  return normalizedMimeType.includes('webm') || normalizedMimeType.includes('opus');
+  return normalizedMimeType.includes('webm')
+    || normalizedMimeType.includes('opus')
+    || normalizedMimeType.includes('mp4')
+    || normalizedMimeType.includes('m4a');
+}
+
+function getExtensionFromMimeType(mimeType: string): string {
+  const normalizedMimeType = mimeType.toLowerCase();
+  if (normalizedMimeType.includes('wav')) return 'wav';
+  if (normalizedMimeType.includes('ogg')) return 'ogg';
+  if (normalizedMimeType.includes('mpeg') || normalizedMimeType.includes('mp3')) return 'mp3';
+  if (normalizedMimeType.includes('mp4') || normalizedMimeType.includes('m4a')) return 'm4a';
+  return 'webm';
+}
+
+function ensureNamedAudioFile(blob: Blob, mimeType: string): File {
+  const safeMimeType = mimeType || blob.type || 'audio/webm';
+  const extension = getExtensionFromMimeType(safeMimeType);
+  const filename = extension === 'wav' ? 'recording.wav' : `recording.${extension}`;
+
+  return new File([blob], filename, { type: safeMimeType });
 }
 
 function encodeWavBuffer(audioBuffer: AudioBuffer): ArrayBuffer {
@@ -211,9 +162,19 @@ function encodeWavBuffer(audioBuffer: AudioBuffer): ArrayBuffer {
 
 async function normalizeAudioBlobToWav(blob: Blob): Promise<Blob> {
   const arrayBuffer = await blob.arrayBuffer();
-  const audioContext = new AudioContext();
+  const AudioContextClass = window.AudioContext || (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+
+  if (!AudioContextClass) {
+    throw new Error('AudioContext is unavailable for WAV normalization');
+  }
+
+  const audioContext = new AudioContextClass();
 
   try {
+    if (audioContext.state === 'suspended') {
+      await audioContext.resume();
+    }
+
     const decoded = await audioContext.decodeAudioData(arrayBuffer.slice(0));
     const offlineContext = new OfflineAudioContext(decoded.numberOfChannels, decoded.length, decoded.sampleRate);
     const source = offlineContext.createBufferSource();
@@ -554,21 +515,15 @@ export function VoiceRecorder({ onComplete, onCancel }: VoiceRecorderProps) {
       return;
     }
 
-<<<<<<< HEAD
-    const finalMimeType = finalBlob.type || normalizedMimeType;
-    const safeWavBlob = await normalizeToWav(finalBlob);
-const finalFile = new File([safeWavBlob], 'recording.wav', { type: 'audio/wav' });
-=======
     finalMimeType = finalBlob.type || finalMimeType;
     const finalFile = ensureNamedAudioFile(finalBlob, finalMimeType);
->>>>>>> 8ed6959eaa5cf52f10df436c7ee424e153f4af4b
 
     await new Promise(resolve => setTimeout(resolve, 300));
     setIsSaving(false);
 
     try {
       onComplete({
-       audioBlob: safeWavBlob,
+        audioBlob: finalBlob,
         audioFile: finalFile,
         audioUrl: persistedAudioPath || finalUrl,
         duration: durationSeconds,

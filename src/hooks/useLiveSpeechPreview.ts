@@ -130,6 +130,7 @@ export function useLiveSpeechPreview(
   const initRecognitionRef = useRef<(() => SpeechRecognition | null) | null>(null);
   const lastFinalSegmentRef = useRef('');
   const committedTextRef = useRef('');
+  const restartTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     const speechApi = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -158,6 +159,7 @@ export function useLiveSpeechPreview(
     };
 
     recognition.onresult = (event: SpeechRecognitionEvent) => {
+      let nextCommitted = committedTextRef.current;
       let nextInterim = '';
 
       for (let index = event.resultIndex; index < event.results.length; index += 1) {
@@ -171,22 +173,24 @@ export function useLiveSpeechPreview(
           }
 
           lastFinalSegmentRef.current = text;
-          setCommittedText((previous) => {
-            const updated = appendUniqueTranscript(previous, text);
-            committedTextRef.current = updated;
-            return updated;
-          });
-          nextInterim = '';
+          nextCommitted = appendUniqueTranscript(nextCommitted, text);
           continue;
         }
 
-        nextInterim = appendUniqueTranscript(committedTextRef.current, text);
+        nextInterim = appendUniqueTranscript(nextCommitted, text);
       }
 
+      committedTextRef.current = nextCommitted;
+      setCommittedText(nextCommitted);
       setInterimText(nextInterim);
     };
 
     recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
+      if (restartTimeoutRef.current) {
+        clearTimeout(restartTimeoutRef.current);
+        restartTimeoutRef.current = null;
+      }
+
       switch (event.error) {
         case 'no-speech':
         case 'aborted':
@@ -210,8 +214,13 @@ export function useLiveSpeechPreview(
     };
 
     recognition.onend = () => {
+      if (restartTimeoutRef.current) {
+        clearTimeout(restartTimeoutRef.current);
+        restartTimeoutRef.current = null;
+      }
+
       if (shouldRestartRef.current && !isPausedRef.current) {
-        setTimeout(() => {
+        restartTimeoutRef.current = setTimeout(() => {
           if (!shouldRestartRef.current || isPausedRef.current) return;
           const nextRecognition = initRecognitionRef.current?.();
           if (nextRecognition) {
@@ -221,7 +230,7 @@ export function useLiveSpeechPreview(
             } catch {
             }
           }
-        }, 250);
+        }, 600);
       } else if (!isPausedRef.current) {
         setPreviewStatus('stopped');
       }
@@ -267,6 +276,11 @@ export function useLiveSpeechPreview(
     shouldRestartRef.current = false;
     isPausedRef.current = false;
 
+    if (restartTimeoutRef.current) {
+      clearTimeout(restartTimeoutRef.current);
+      restartTimeoutRef.current = null;
+    }
+
     if (recognitionRef.current) {
       try {
         recognitionRef.current.stop();
@@ -281,6 +295,11 @@ export function useLiveSpeechPreview(
   const pausePreview = useCallback(() => {
     isPausedRef.current = true;
     shouldRestartRef.current = false;
+
+    if (restartTimeoutRef.current) {
+      clearTimeout(restartTimeoutRef.current);
+      restartTimeoutRef.current = null;
+    }
 
     if (recognitionRef.current) {
       try {
@@ -311,6 +330,11 @@ export function useLiveSpeechPreview(
   }, [initRecognition, supported]);
 
   const resetPreview = useCallback(() => {
+    if (restartTimeoutRef.current) {
+      clearTimeout(restartTimeoutRef.current);
+      restartTimeoutRef.current = null;
+    }
+
     setInterimText('');
     setCommittedText('');
     committedTextRef.current = '';
@@ -322,6 +346,10 @@ export function useLiveSpeechPreview(
   useEffect(() => {
     return () => {
       shouldRestartRef.current = false;
+      if (restartTimeoutRef.current) {
+        clearTimeout(restartTimeoutRef.current);
+        restartTimeoutRef.current = null;
+      }
       if (recognitionRef.current) {
         try {
           recognitionRef.current.stop();

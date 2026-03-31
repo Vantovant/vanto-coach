@@ -817,7 +817,7 @@ export function VoiceRecorder({ onComplete, onCancel }: VoiceRecorderProps) {
                   <div className="flex-1 text-left">
                     <p className="text-sm font-medium text-primary">Capturing transcript</p>
                     <p className="text-xs text-muted-foreground mt-0.5">
-                      We&apos;re using browser speech recognition while audio recording continues.
+                      We&apos;re using browser speech recognition while audio recording continues. Android browsers may require manual transcript entry if live preview stays unavailable.
                     </p>
                   </div>
                 </div>

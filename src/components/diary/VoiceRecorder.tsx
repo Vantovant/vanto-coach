@@ -528,8 +528,8 @@ export function VoiceRecorder({ onComplete, onCancel }: VoiceRecorderProps) {
         audioUrl: persistedAudioPath || finalUrl,
         duration: durationSeconds,
         mimeType: finalFile.type,
-        transcript: editedTranscript,
-        cleanedTranscript: processedResult?.cleanedTranscript,
+        transcript: transcriptForSave,
+        cleanedTranscript: processedResult?.cleanedTranscript || transcriptForSave,
         summary: processedResult?.summary,
         keyTopics: processedResult?.keyTopics,
         mood: processedResult?.mood,
@@ -621,6 +621,9 @@ export function VoiceRecorder({ onComplete, onCancel }: VoiceRecorderProps) {
   const transcriptStatus = getTranscriptStatus();
   const combinedError = audioValidationError || recordingError || speechError;
   const liveTranscript = interimText;
+  const transcriptForSave = editedTranscript.trim()
+    || committedText.trim()
+    || [committedText, liveTranscript].filter(Boolean).join(' ').trim();
   const transcriptBadgeLabel = editedTranscript
     ? 'Captured'
     : transcriptionStatus === 'capturing'

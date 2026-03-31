@@ -103,6 +103,7 @@ function appendUniqueTranscript(existing: string, incoming: string): string {
   if (!normalizedExisting) return normalizedIncoming;
   if (normalizedExisting === normalizedIncoming) return existing;
   if (normalizedExisting.endsWith(normalizedIncoming)) return existing;
+  if (normalizedIncoming.startsWith(normalizedExisting)) return normalizedIncoming;
 
   return `${existing.trim()} ${normalizedIncoming}`.trim();
 }
@@ -128,6 +129,7 @@ export function useLiveSpeechPreview(
   const shouldRestartRef = useRef(false);
   const initRecognitionRef = useRef<(() => SpeechRecognition | null) | null>(null);
   const lastFinalSegmentRef = useRef('');
+  const committedTextRef = useRef('');
 
   useEffect(() => {
     const speechApi = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -169,11 +171,16 @@ export function useLiveSpeechPreview(
           }
 
           lastFinalSegmentRef.current = text;
-          setCommittedText((previous) => appendUniqueTranscript(previous, text));
+          setCommittedText((previous) => {
+            const updated = appendUniqueTranscript(previous, text);
+            committedTextRef.current = updated;
+            return updated;
+          });
+          nextInterim = '';
           continue;
         }
 
-        nextInterim = appendUniqueTranscript(nextInterim, text);
+        nextInterim = appendUniqueTranscript(committedTextRef.current, text);
       }
 
       setInterimText(nextInterim);
@@ -226,6 +233,10 @@ export function useLiveSpeechPreview(
   useEffect(() => {
     initRecognitionRef.current = initRecognition;
   }, [initRecognition]);
+  useEffect(() => {
+    committedTextRef.current = committedText;
+  }, [committedText]);
+
 
   const startPreview = useCallback(() => {
     if (!supported) {
@@ -236,6 +247,7 @@ export function useLiveSpeechPreview(
     setError(null);
     setInterimText('');
     setCommittedText('');
+    committedTextRef.current = '';
     lastFinalSegmentRef.current = '';
     isPausedRef.current = false;
     shouldRestartRef.current = true;
@@ -301,6 +313,7 @@ export function useLiveSpeechPreview(
   const resetPreview = useCallback(() => {
     setInterimText('');
     setCommittedText('');
+    committedTextRef.current = '';
     lastFinalSegmentRef.current = '';
     setError(null);
     setPreviewStatus(supported ? 'idle' : 'unsupported');
